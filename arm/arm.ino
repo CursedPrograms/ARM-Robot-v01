@@ -26,7 +26,7 @@ void setup() {
   pwm.setPWM(2, 0, angleToPulse(170)); // 30 Min
   pwm.setPWM(3, 0, angleToPulse(140));
   pwm.setPWM(4, 0, angleToPulse(180));
-  pwm.setPWM(15, 0, angleToPulse(0));
+  pwm.setPWM(5, 0, angleToPulse(0));
 }
 
 void loop() {
