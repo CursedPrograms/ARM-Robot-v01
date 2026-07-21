@@ -35,3 +35,6 @@
 .venv/
 __pycache__/
 __pycache__/joystick_test.cpython-312.pyc
+
+# Logs
+logs/

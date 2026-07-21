@@ -13,4 +13,4 @@ if [ ! -d "$VENV_DIR" ]; then
     "$VENV_DIR/bin/pip" install -r requirements.txt
 fi
 
-exec "$VENV_DIR/bin/python" joystick_test.py "$@"
+exec "$VENV_DIR/bin/python" scripts/joystick_test.py "$@"

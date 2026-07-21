@@ -15,14 +15,26 @@ Usage:
 """
 
 import argparse
+import datetime
 import sys
 import time
+from pathlib import Path
 
 try:
     import pygame
 except ImportError:
     print("pygame is not installed. Install it with: pip install pygame")
     sys.exit(1)
+
+
+LOG_DIR = Path(__file__).resolve().parent.parent / "logs" / "joystick_test"
+
+
+def open_log_file():
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = LOG_DIR / f"{timestamp}.log"
+    return open(log_path, "w", encoding="utf-8")
 
 
 def list_joysticks():
@@ -56,6 +68,11 @@ def test_joystick(device):
     print(f"Axes: {js.get_numaxes()}  Buttons: {js.get_numbuttons()}  Hats: {js.get_numhats()}")
     print("Move sticks / press buttons to see live values. Ctrl+C to stop.\n")
 
+    log_file = open_log_file()
+    print(f"Logging to {log_file.name}")
+    log_file.write(f"Joystick: {js.get_name()}\n")
+    log_file.write(f"Axes: {js.get_numaxes()}  Buttons: {js.get_numbuttons()}  Hats: {js.get_numhats()}\n")
+
     try:
         while True:
             pygame.event.pump()
@@ -63,12 +80,16 @@ def test_joystick(device):
             axes = " ".join(f"A{i}:{js.get_axis(i):+.2f}" for i in range(js.get_numaxes()))
             buttons = " ".join(f"B{i}:{js.get_button(i)}" for i in range(js.get_numbuttons()))
             hats = " ".join(f"H{i}:{js.get_hat(i)}" for i in range(js.get_numhats()))
+            line = f"{axes}  {buttons}  {hats}"
 
-            print(f"{axes}  {buttons}  {hats}", end="\r", flush=True)
+            print(line, end="\r", flush=True)
+            timestamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            log_file.write(f"{timestamp} {line}\n")
             time.sleep(0.05)
     except KeyboardInterrupt:
         print("\nStopped.")
     finally:
+        log_file.close()
         js.quit()
 
 
