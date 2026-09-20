@@ -3,11 +3,11 @@ cd /d "%~dp0"
 
 where py >nul 2>nul
 if %errorlevel%==0 (
-    py -3 run.py %*
+    py -3 controller.py %*
 ) else (
     where python >nul 2>nul
     if %errorlevel%==0 (
-        python run.py %*
+        python controller.py %*
     ) else (
         echo Python was not found on this system.
         echo Install it from https://www.python.org/downloads/ and make sure
