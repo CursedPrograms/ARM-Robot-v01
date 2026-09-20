@@ -4,15 +4,14 @@ IK_controller.py - Inverse/forward kinematics for the arm, driving motors
 1-4 (base, shoulder, elbow, wrist pitch) to reach a target (x, y, z)
 position over USB serial, talking to the Arduino running scripts/arm/arm.ino.
 
-Assumed physical role of each motor (see scripts/config.json / motor_config.py
-for channel/range/rest/invert):
+Physical role of each motor (see scripts/config.json / motor_config.py for
+channel/range/rest/invert):
     Motor 1 - base rotation (yaw, about the vertical axis)
     Motor 2 - shoulder (pitch)
     Motor 3 - elbow (pitch)
     Motor 4 - wrist pitch
     Motor 5 - wrist roll (NOT part of position IK - set directly)
     Motor 6 - claw open/close (NOT part of position IK - set directly)
-Motor 5's role is an assumption (not yet confirmed against the hardware).
 
 Coordinate frame (millimetres):
     Origin is the base rotation axis at the mounting surface.
