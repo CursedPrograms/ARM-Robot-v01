@@ -15,6 +15,12 @@ Modes (click the buttons, or the Joystick/Sliders/IK mode is picked with
                pose; motors 1-4 are solved with inverse_kinematics() from
                IK_controller.py. Requires config.json's "geometry"
                to be measured first (see IK_controller.py).
+    Fleet    - starts an HTTP bridge (same wire protocol as RIFT's
+               Fleet/register.py) so the [RIFT](https://github.com/CursedPrograms/RIFT)
+               dashboard can see and control this arm over the network, the
+               same way it talks to MILA/WHIP/NORA/KIDA: serves /status,
+               /cmd?motor=&angle=, and /reset, and heartbeats a /register
+               call to RIFT/NORA. Requires pip install flask requests.
 
 Recording: click Record to start capturing every commanded motor pose
 (sampled every frame, so IK's continuously-interpolated motion is captured
@@ -26,16 +32,19 @@ when playback finishes.
 
 Requires:
     pip install pygame pyserial
+    pip install flask requests   # only needed for Fleet mode
 
 Usage:
     python controller.py --list-ports          # find your Arduino's port
     python controller.py --port COM6
     python controller.py --port COM6 --mode slider
+    python controller.py --port COM6 --mode fleet --fleet-port 5011
 """
 
 import argparse
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -71,6 +80,14 @@ DEADZONE = 0.05
 
 # Descriptions that identify likely Arduino USB-serial adapters, for --port auto-detect
 ARDUINO_HINTS = ("arduino", "ch340", "usb-serial", "usb serial", "cp210", "ftdi")
+
+# ---- Fleet mode (RIFT HTTP bridge) ----
+FLEET_NAME = "ARM"
+FLEET_TYPE = "robot"
+FLEET_CAPABILITIES = ["servo_control", "6dof", "arm"]
+DEFAULT_FLEET_PORT = 5011
+# Must stay under RIFT's FLEET_TTL_SECS (20s) - same cadence as RIFT's own Fleet/register.py.
+FLEET_HEARTBEAT_SECS = 10
 
 # ---- Window layout ----
 WINDOW_WIDTH, WINDOW_HEIGHT = 560, 680
@@ -217,6 +234,114 @@ class Button:
         surface.blit(text, text.get_rect(center=self.rect.center))
 
 
+def start_fleet_heartbeat(rift_host, rift_port, interval=FLEET_HEARTBEAT_SECS):
+    """Background thread that repeatedly POSTs /register to RIFT/NORA. Safe to
+    call even if the target isn't reachable yet - it just keeps retrying."""
+    import requests
+
+    stop_event = threading.Event()
+
+    def _loop():
+        while not stop_event.is_set():
+            try:
+                requests.post(
+                    f"http://{rift_host}:{rift_port}/register",
+                    data={
+                        "name": FLEET_NAME,
+                        "type": FLEET_TYPE,
+                        "capabilities": ",".join(FLEET_CAPABILITIES),
+                    },
+                    timeout=2,
+                )
+            except requests.RequestException:
+                pass
+            stop_event.wait(interval)
+
+    t = threading.Thread(target=_loop, daemon=True, name="rift-fleet-heartbeat")
+    t.start()
+    return t, stop_event
+
+
+def create_fleet_app(motors, fleet_state, fleet_lock, connected):
+    """Flask app bridging RIFT's HTTP protocol to fleet_state["angles"], which
+    the main loop reads each frame and sends over serial like any other mode."""
+    from flask import Flask, jsonify, request
+
+    app = Flask(__name__)
+
+    @app.route("/ping")
+    def ping():
+        return f"{FLEET_NAME} alive", 200, {"Content-Type": "text/plain"}
+
+    @app.route("/status")
+    def status():
+        with fleet_lock:
+            angles = dict(fleet_state["angles"])
+        return jsonify({
+            "connected": connected(),
+            "motors": {
+                str(n): {"channel": m["channel"], "angle": angles[n], "min": m["min"], "max": m["max"]}
+                for n, m in motors.items()
+            },
+        })
+
+    @app.route("/cmd")
+    def cmd():
+        try:
+            motor = int(request.args["motor"])
+            angle = int(request.args["angle"])
+        except (KeyError, ValueError):
+            return jsonify({"error": "expected ?motor=<1-6>&angle=<degrees>"}), 400
+        if motor not in motors:
+            return jsonify({"error": f"unknown motor {motor}"}), 400
+        m = motors[motor]
+        angle = max(m["min"], min(m["max"], angle))
+        with fleet_lock:
+            fleet_state["angles"][motor] = angle
+        return jsonify({"motor": motor, "angle": angle})
+
+    @app.route("/reset")
+    def reset():
+        motor = request.args.get("motor", type=int)
+        with fleet_lock:
+            if motor is not None:
+                if motor not in motors:
+                    return jsonify({"error": f"unknown motor {motor}"}), 400
+                fleet_state["angles"][motor] = motors[motor]["rest"]
+                return jsonify({"motor": motor, "angle": fleet_state["angles"][motor]})
+            for n in motors:
+                fleet_state["angles"][n] = motors[n]["rest"]
+            return jsonify(dict(fleet_state["angles"]))
+
+    return app
+
+
+def start_fleet_server(args, motors, fleet_state, fleet_lock, connected, fleet_status):
+    """Lazily start the Fleet-mode HTTP bridge + RIFT heartbeat, once. Missing
+    flask/requests is reported into fleet_status["error"] instead of crashing
+    the whole controller, since Fleet mode is optional."""
+    if fleet_status["started"] or fleet_status["error"]:
+        return
+
+    try:
+        app = create_fleet_app(motors, fleet_state, fleet_lock, connected)
+    except ImportError:
+        fleet_status["error"] = "flask is not installed. Install it with: pip install flask requests"
+        return
+
+    def _serve():
+        app.run(host="0.0.0.0", port=args.fleet_port, use_reloader=False)
+
+    threading.Thread(target=_serve, daemon=True, name="fleet-http-server").start()
+    fleet_status["started"] = True
+
+    if not args.no_register:
+        try:
+            start_fleet_heartbeat(args.rift_host, args.rift_port)
+        except ImportError:
+            fleet_status["error"] = "requests is not installed (HTTP server running, but no RIFT heartbeat). Install it with: pip install requests"
+
+
 def send(ser, commands, last_sent):
     """Send commands (channel:angle) over serial if changed from last_sent. Returns the new last_sent."""
     if commands != last_sent:
@@ -233,9 +358,13 @@ def main():
     parser.add_argument("--port", type=str, default=None, help="Serial port, e.g. COM6 (auto-detected if omitted)")
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate (default 115200, must match .ino)")
     parser.add_argument("--rate", type=float, default=30, help="Update rate in Hz (default 30)")
-    parser.add_argument("--mode", choices=["joystick", "slider", "ik"], default=None, help="Initial mode (default: joystick if one is found, else sliders)")
+    parser.add_argument("--mode", choices=["joystick", "slider", "ik", "fleet"], default=None, help="Initial mode (default: joystick if one is found, else sliders)")
     parser.add_argument("--list", action="store_true", help="List joystick devices and exit")
     parser.add_argument("--list-ports", action="store_true", help="List serial ports and exit")
+    parser.add_argument("--fleet-port", type=int, default=DEFAULT_FLEET_PORT, help=f"Fleet mode HTTP port (default {DEFAULT_FLEET_PORT})")
+    parser.add_argument("--rift-host", type=str, default="127.0.0.1", help="Fleet mode: RIFT/NORA fleet-registry host (default 127.0.0.1)")
+    parser.add_argument("--rift-port", type=int, default=5000, help="Fleet mode: RIFT/NORA fleet-registry port (default 5000)")
+    parser.add_argument("--no-register", action="store_true", help="Fleet mode: don't heartbeat to the fleet registry, just serve the HTTP API")
     args = parser.parse_args()
 
     if args.list:
@@ -299,10 +428,21 @@ def main():
     claw_closed = False
     ik_reachable = True
 
+    fleet_lock = threading.Lock()
+    fleet_state = {"angles": {n: motors[n]["rest"] for n in motors}}
+    fleet_status = {"started": False, "error": None}
+
+    def ensure_fleet_started():
+        start_fleet_server(args, motors, fleet_state, fleet_lock, lambda: ser is not None, fleet_status)
+
+    if mode == "fleet":
+        ensure_fleet_started()
+
     mode_buttons = {
-        "joystick": Button((30, MODE_BUTTON_Y, 160, 34), "Joystick"),
-        "slider": Button((200, MODE_BUTTON_Y, 160, 34), "Sliders"),
-        "ik": Button((370, MODE_BUTTON_Y, 160, 34), "IK"),
+        "joystick": Button((20, MODE_BUTTON_Y, 122, 34), "Joystick"),
+        "slider": Button((152, MODE_BUTTON_Y, 122, 34), "Sliders"),
+        "ik": Button((284, MODE_BUTTON_Y, 122, 34), "IK"),
+        "fleet": Button((416, MODE_BUTTON_Y, 122, 34), "Fleet"),
     }
     record_button = Button((30, TRANSPORT_BUTTON_Y, 160, 30), "Record")
     play_button = Button((200, TRANSPORT_BUTTON_Y, 160, 30), "Play")
@@ -353,6 +493,9 @@ def main():
                             mode = "slider"
                         elif mode_buttons["ik"].hit(pos):
                             mode = "ik"
+                        elif mode_buttons["fleet"].hit(pos):
+                            mode = "fleet"
+                            ensure_fleet_started()
                         elif record_button.hit(pos):
                             if not recording:
                                 recording = True
@@ -420,6 +563,9 @@ def main():
                         else:
                             ik_reachable = False
                             commands = last_valid_ik_commands  # hold last good pose
+                elif mode == "fleet":
+                    with fleet_lock:
+                        commands = {motors[n]["channel"]: fleet_state["angles"][n] for n in motors}
 
                 if commands is not None:
                     last_sent = send(ser, commands, last_sent)
@@ -478,6 +624,20 @@ def main():
                     for ch, ang in sorted(last_sent.items()):
                         n = channel_to_motor.get(ch, "?")
                         screen.blit(font.render(f"Motor {n} (ch {ch}): {ang}", True, TEXT_COLOR), (20, y))
+                        y += 28
+            elif mode == "fleet":
+                if fleet_status["error"]:
+                    screen.blit(small_font.render(fleet_status["error"], True, WARN_COLOR), (20, MARGIN_TOP - 20))
+                else:
+                    screen.blit(small_font.render(
+                        f"Serving http://0.0.0.0:{args.fleet_port}  (/status, /cmd?motor=&angle=, /reset)"
+                        + ("" if args.no_register else f"  -  heartbeating to RIFT at {args.rift_host}:{args.rift_port}"),
+                        True, STATUS_COLOR), (20, MARGIN_TOP - 20))
+                    y = MARGIN_TOP
+                    for n, m in sorted(motors.items()):
+                        with fleet_lock:
+                            ang = fleet_state["angles"][n]
+                        screen.blit(font.render(f"Motor {n} (ch {m['channel']}): {ang}", True, TEXT_COLOR), (20, y))
                         y += 28
 
             if playing:

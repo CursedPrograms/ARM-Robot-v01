@@ -3,7 +3,7 @@
 joystick_test.py - Standalone joystick/controller input tester.
 
 Lists connected joysticks and live-prints axis, button, and hat values
-so you can verify wiring/mapping before running scripts/run.py.
+so you can verify wiring/mapping before running scripts/controller.py.
 
 Requires:
     pip install pygame

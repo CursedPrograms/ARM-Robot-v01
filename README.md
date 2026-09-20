@@ -15,15 +15,15 @@
 
 ## Fleet Integration
 
-This arm can join the [RIFT](https://github.com/CursedPrograms/RIFT) fleet dashboard, the same way MILA/WHIP/NORA/KIDA do. `scripts/fleet_server.py` bridges RIFT's HTTP protocol to the Arduino's USB serial connection: it serves `/status`, `/cmd?motor=&angle=`, and `/reset`, and heartbeats a `/register` call to RIFT/NORA so this arm ("ARM", port `5011`) shows up in the dashboard.
+This arm can join the [RIFT](https://github.com/CursedPrograms/RIFT) fleet dashboard, the same way MILA/WHIP/NORA/KIDA do. `controller.py`'s Fleet mode bridges RIFT's HTTP protocol to the Arduino's USB serial connection: it serves `/status`, `/cmd?motor=&angle=`, and `/reset`, and heartbeats a `/register` call to RIFT/NORA so this arm ("ARM", port `5011`) shows up in the dashboard.
 
 ```bash
 pip install -r requirements.txt
-python scripts/fleet_server.py --list-ports          # find the Arduino's port
-python scripts/fleet_server.py --serial-port COM6
+python scripts/controller.py --list-ports              # find the Arduino's port
+python scripts/controller.py --port COM6 --mode fleet
 ```
 
-Per-motor servo channel, angle range, resting angle, and invert flag all come from `config.json` (see `scripts/motor_config.py`) - the same config `controller.py` and `slider_controller.py` use. `.bat` launchers (`run.bat`, `controller.bat`, `slider_controller.bat`, `fleet_server.bat`, `run_joystick_test.bat`) live at the repo root alongside `config.json`; the Python scripts themselves stay in `scripts/`.
+Per-motor servo channel, angle range, resting angle, and invert flag all come from `config.json` (see `scripts/motor_config.py`) - the same config `slider_controller.py` uses. `.bat` launchers (`controller.bat`, `slider_controller.bat`, `fleet_server.bat`, `run_joystick_test.bat`) live at the repo root alongside `config.json`; the Python scripts themselves stay in `scripts/`.
 
 ---
 
