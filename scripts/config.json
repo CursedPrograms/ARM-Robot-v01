@@ -1,6 +1,10 @@
 {
-    "invertMotor1": false,
-    "invertMotor2": true,
-    "invertMotor3": false,
-    "invertMotor4": false
+    "motors": {
+        "1": { "channel": 0, "min": 0,  "max": 270, "rest": 135, "invert": false },
+        "2": { "channel": 1, "min": 0,  "max": 270, "rest": 135, "invert": true },
+        "3": { "channel": 2, "min": 0,  "max": 270, "rest": 135, "invert": false },
+        "4": { "channel": 3, "min": 65, "max": 205, "rest": 135, "invert": false },
+        "5": { "channel": 4, "min": 0,  "max": 270, "rest": 135, "invert": false },
+        "6": { "channel": 5, "min": 40, "max": 145, "rest": 40,  "invert": false }
+    }
 }

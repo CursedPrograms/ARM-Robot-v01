@@ -1,17 +1,26 @@
 #!/usr/bin/env python3
 """
-controller.py - Drive motor 1-4 from a joystick over USB serial,
+controller.py - Drive motor 1-6 from a joystick over USB serial,
 talking to the Arduino running scripts/arm/arm.ino.
 
-Mapping:
-    Axis 0 (A0) -> Motor 1 / servo channel 0 (base)
+Per-motor servo channel, angle range, resting angle, and invert flag come
+from scripts/config.json (see motor_config.py) - edit that file to tune the
+arm's physical limits without touching this script.
+
+Joystick mapping:
+    Axis 0 (A0) -> Motor 1 (base)
         -1.00 = left, 0.00 = centre, +1.00 = right
-    Axis 1 (A1) -> Motor 2 / servo channel 1 (shoulder)
+    Axis 1 (A1) -> Motor 2 (shoulder)
         -1.00 = left, 0.00 = centre, +1.00 = right
-    Hat 0 Y (D-pad up/down) -> Motor 3 / servo channel 2 (elbow)
+    Axis 2 (A2) -> Motor 5
+        -1.00 = left, 0.00 = centre, +1.00 = right
+        (A2 and A3 move together on this stick; only A2 is read)
+    Hat 0 Y (D-pad up/down) -> Motor 3 (elbow)
         +1 = forward, 0 = centre, -1 = backward
-    Buttons 2/3 -> Motor 4 / servo channel 3 (wrist)
+    Buttons 2/3 -> Motor 4 (wrist)
         B3=1,B2=0 = forward, B2=1,B3=0 = backward, otherwise = centre
+    Button 0 -> Motor 6 (claw)
+        B0=1 = closed (motor 6 max angle), B0=0 = open (motor 6 min angle)
 
 Requires:
     pip install pygame pyserial
@@ -23,10 +32,8 @@ Usage:
 """
 
 import argparse
-import json
 import sys
 import time
-from pathlib import Path
 
 try:
     import pygame
@@ -41,10 +48,13 @@ except ImportError:
     print("pyserial is not installed. Install it with: pip install pyserial")
     sys.exit(1)
 
+from motor_config import load_motor_config
+
 
 # Joystick axes
 AXIS_MOTOR1 = 0
 AXIS_MOTOR2 = 1
+AXIS_MOTOR5 = 2  # A2 and A3 move together on this stick; only A2 is read
 
 # Joystick hat (D-pad) used for motor 3: hat index and its Y-component
 HAT_MOTOR3 = 0
@@ -54,18 +64,8 @@ HAT_MOTOR3_COMPONENT = 1
 BUTTON_MOTOR4_BACKWARD = 2
 BUTTON_MOTOR4_FORWARD = 3
 
-# Servo channel indices on the PCA9685 (must match scripts/arm/arm.ino)
-SERVO_MOTOR1 = 0
-SERVO_MOTOR2 = 1
-SERVO_MOTOR3 = 2
-SERVO_MOTOR4 = 3
-
-# Servo angle range (degrees), matching SERVOMIN/SERVOMAX in arm.ino.
-# -1.00 -> MIN (left), 0.00 -> centre, +1.00 -> MAX (right)
-ANGLE_MIN, ANGLE_MAX = 0, 270
-
-# Motor 4 is mechanically limited to a narrower range than the other motors.
-MOTOR4_ANGLE_MIN, MOTOR4_ANGLE_MAX = 65, 205
+# Joystick button used for motor 6 (claw open/close)
+BUTTON_MOTOR6_CLOSE = 0
 
 # Deadzone for stick axes to avoid jitter near center
 DEADZONE = 0.05
@@ -73,30 +73,8 @@ DEADZONE = 0.05
 # Descriptions that identify likely Arduino USB-serial adapters, for --port auto-detect
 ARDUINO_HINTS = ("arduino", "ch340", "usb-serial", "usb serial", "cp210", "ftdi")
 
-CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
 
-
-def load_config():
-    """Load invertMotor1..4 (and other settings) from config.json, if present."""
-    defaults = {
-        "invertMotor1": False,
-        "invertMotor2": False,
-        "invertMotor3": False,
-        "invertMotor4": False,
-    }
-    if not CONFIG_PATH.exists():
-        return defaults
-    try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, json.JSONDecodeError) as e:
-        print(f"Warning: could not read {CONFIG_PATH.name} ({e}), using defaults.")
-        return defaults
-    defaults.update(data)
-    return defaults
-
-
-def axis_to_angle(value, lo=ANGLE_MIN, hi=ANGLE_MAX, deadzone=DEADZONE):
+def axis_to_angle(value, lo, hi, deadzone=DEADZONE):
     """Map a [-1, 1] joystick axis value to [lo, hi] degrees, with deadzone."""
     if abs(value) < deadzone:
         value = 0.0
@@ -170,13 +148,11 @@ def main():
     js.init()
     print(f"Using joystick: {js.get_name()}")
 
-    config = load_config()
-    invert_motor1 = bool(config.get("invertMotor1", False))
-    invert_motor2 = bool(config.get("invertMotor2", False))
-    invert_motor3 = bool(config.get("invertMotor3", False))
-    invert_motor4 = bool(config.get("invertMotor4", False))
-    print(f"Config: invertMotor1={invert_motor1} invertMotor2={invert_motor2} "
-          f"invertMotor3={invert_motor3} invertMotor4={invert_motor4}")
+    motors = load_motor_config()
+    for n in sorted(motors):
+        m = motors[n]
+        print(f"Motor {n}: channel={m['channel']} range={m['min']}-{m['max']} "
+              f"rest={m['rest']} invert={m['invert']}")
 
     port = args.port or autodetect_port()
     if not port:
@@ -204,6 +180,7 @@ def main():
             motor1_val = js.get_axis(AXIS_MOTOR1) if js.get_numaxes() > AXIS_MOTOR1 else 0.0
             motor2_val = js.get_axis(AXIS_MOTOR2) if js.get_numaxes() > AXIS_MOTOR2 else 0.0
             motor3_val = js.get_hat(HAT_MOTOR3)[HAT_MOTOR3_COMPONENT] if js.get_numhats() > HAT_MOTOR3 else 0.0
+            motor5_val = js.get_axis(AXIS_MOTOR5) if js.get_numaxes() > AXIS_MOTOR5 else 0.0
 
             motor4_forward = js.get_button(BUTTON_MOTOR4_FORWARD) if js.get_numbuttons() > BUTTON_MOTOR4_FORWARD else 0
             motor4_backward = js.get_button(BUTTON_MOTOR4_BACKWARD) if js.get_numbuttons() > BUTTON_MOTOR4_BACKWARD else 0
@@ -214,25 +191,35 @@ def main():
             else:
                 motor4_val = 0.0
 
-            if invert_motor1:
-                motor1_val = -motor1_val
-            if invert_motor2:
-                motor2_val = -motor2_val
-            if invert_motor3:
-                motor3_val = -motor3_val
-            if invert_motor4:
-                motor4_val = -motor4_val
+            motor6_close = js.get_button(BUTTON_MOTOR6_CLOSE) if js.get_numbuttons() > BUTTON_MOTOR6_CLOSE else 0
+            if motors[6]["invert"]:
+                motor6_close = not motor6_close
+            motor6_angle = motors[6]["max"] if motor6_close else motors[6]["min"]
 
-            motor1_angle = axis_to_angle(motor1_val)
-            motor2_angle = axis_to_angle(motor2_val)
-            motor3_angle = axis_to_angle(motor3_val)
-            motor4_angle = axis_to_angle(motor4_val, lo=MOTOR4_ANGLE_MIN, hi=MOTOR4_ANGLE_MAX)
+            if motors[1]["invert"]:
+                motor1_val = -motor1_val
+            if motors[2]["invert"]:
+                motor2_val = -motor2_val
+            if motors[3]["invert"]:
+                motor3_val = -motor3_val
+            if motors[4]["invert"]:
+                motor4_val = -motor4_val
+            if motors[5]["invert"]:
+                motor5_val = -motor5_val
+
+            motor1_angle = axis_to_angle(motor1_val, motors[1]["min"], motors[1]["max"])
+            motor2_angle = axis_to_angle(motor2_val, motors[2]["min"], motors[2]["max"])
+            motor3_angle = axis_to_angle(motor3_val, motors[3]["min"], motors[3]["max"])
+            motor4_angle = axis_to_angle(motor4_val, motors[4]["min"], motors[4]["max"])
+            motor5_angle = axis_to_angle(motor5_val, motors[5]["min"], motors[5]["max"])
 
             commands = {
-                SERVO_MOTOR1: motor1_angle,
-                SERVO_MOTOR2: motor2_angle,
-                SERVO_MOTOR3: motor3_angle,
-                SERVO_MOTOR4: motor4_angle,
+                motors[1]["channel"]: motor1_angle,
+                motors[2]["channel"]: motor2_angle,
+                motors[3]["channel"]: motor3_angle,
+                motors[4]["channel"]: motor4_angle,
+                motors[5]["channel"]: motor5_angle,
+                motors[6]["channel"]: motor6_angle,
             }
 
             # Only send a line if something changed, to keep serial traffic light
@@ -242,7 +229,8 @@ def main():
                 last_sent = commands
 
             print(f"motor1:{motor1_angle:3d} motor2:{motor2_angle:3d} "
-                  f"motor3:{motor3_angle:3d} motor4:{motor4_angle:3d}", end="\r", flush=True)
+                  f"motor3:{motor3_angle:3d} motor4:{motor4_angle:3d} motor5:{motor5_angle:3d} "
+                  f"claw:{'closed' if motor6_close else 'open':6s}", end="\r", flush=True)
 
             time.sleep(interval)
     except KeyboardInterrupt:

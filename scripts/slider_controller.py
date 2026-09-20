@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """
-slider_controller.py - Manual on-screen slider GUI to drive motor 1-4
-(servo channels 0-3) over USB serial, talking to the Arduino running
-scripts/arm/arm.ino. No joystick required.
+slider_controller.py - Manual on-screen slider GUI to drive motor 1-6 over
+USB serial, talking to the Arduino running scripts/arm/arm.ino. No joystick
+required.
 
-Drag each slider with the mouse to set that motor's angle (0-270 degrees).
-The current angle is shown as text next to each slider and sent to the
-Arduino over serial whenever it changes.
+Per-motor servo channel, angle range, and resting angle come from
+scripts/config.json (see motor_config.py) - edit that file to tune the arm's
+physical limits without touching this script.
+
+Drag each slider with the mouse to set that motor's angle. The current angle
+is shown as text next to each slider and sent to the Arduino over serial
+whenever it changes. "Reset Position" snaps every slider back to its
+resting angle from config.json.
 
 Requires:
     pip install pygame pyserial
@@ -33,21 +38,7 @@ except ImportError:
     print("pyserial is not installed. Install it with: pip install pyserial")
     sys.exit(1)
 
-
-ANGLE_MIN, ANGLE_MAX = 0, 270
-START_ANGLE = 135
-
-# Servo channel indices on the PCA9685 (must match scripts/arm/arm.ino), with each
-# motor's (min, max) angle range - motor 4 is mechanically limited to 65-205,
-# motor 6 is the claw (40 = open, 145 = closed).
-MOTORS = [
-    ("Motor 1", 0, ANGLE_MIN, ANGLE_MAX),
-    ("Motor 2", 1, ANGLE_MIN, ANGLE_MAX),
-    ("Motor 3", 2, ANGLE_MIN, ANGLE_MAX),
-    ("Motor 4", 3, 65, 205),
-    ("Motor 5", 4, ANGLE_MIN, ANGLE_MAX),
-    ("Motor 6 (Claw)", 5, 40, 145),
-]
+from motor_config import load_motor_config
 
 # Descriptions that identify likely Arduino USB-serial adapters, for --port auto-detect
 ARDUINO_HINTS = ("arduino", "ch340", "usb-serial", "usb serial", "cp210", "ftdi")
@@ -88,13 +79,14 @@ def autodetect_port():
 
 
 class Slider:
-    def __init__(self, label, channel, lo, hi, y):
+    def __init__(self, label, channel, lo, hi, rest, y):
         self.label = label
         self.channel = channel
         self.lo = lo
         self.hi = hi
+        self.rest = max(lo, min(hi, rest))
         self.y = y
-        self.angle = max(lo, min(hi, START_ANGLE))
+        self.angle = self.rest
         self.dragging = False
 
     def value_to_x(self):
@@ -167,8 +159,12 @@ def main():
     small_font = pygame.font.SysFont(None, 20)
     clock = pygame.time.Clock()
 
-    sliders = [Slider(label, channel, lo, hi, MARGIN_TOP + i * ROW_HEIGHT)
-               for i, (label, channel, lo, hi) in enumerate(MOTORS)]
+    motors = load_motor_config()
+    sliders = [
+        Slider(f"Motor {n}", motors[n]["channel"], motors[n]["min"], motors[n]["max"],
+               motors[n]["rest"], MARGIN_TOP + i * ROW_HEIGHT)
+        for i, n in enumerate(sorted(motors))
+    ]
 
     last_sent = {}
     running = True
@@ -179,7 +175,7 @@ def main():
                     running = False
                 elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and RESET_BUTTON_RECT.collidepoint(event.pos):
                     for slider in sliders:
-                        slider.angle = max(slider.lo, min(slider.hi, START_ANGLE))
+                        slider.angle = slider.rest
                 else:
                     for slider in sliders:
                         slider.handle_event(event)
@@ -192,7 +188,7 @@ def main():
                 last_sent = commands
 
             screen.fill(BG_COLOR)
-            title_surf = font.render("Drag sliders to set each motor angle (0-270)", True, TEXT_COLOR)
+            title_surf = font.render("Drag sliders to set each motor angle", True, TEXT_COLOR)
             screen.blit(title_surf, (20, 20))
             status_surf = small_font.render(status, True, STATUS_COLOR)
             screen.blit(status_surf, (20, 46))
