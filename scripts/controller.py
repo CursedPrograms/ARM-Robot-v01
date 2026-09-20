@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
 """
-controller.py - Drive motor 1-6 from a joystick over USB serial,
-talking to the Arduino running scripts/arm/arm.ino.
+controller.py - Main arm control script. Switch at runtime between three
+input modes and record/replay motion macros in any of them, talking to the
+Arduino running scripts/arm/arm.ino over USB serial.
 
-Per-motor servo channel, angle range, resting angle, and invert flag come
-from scripts/config.json (see motor_config.py) - edit that file to tune the
-arm's physical limits without touching this script.
+Modes (click the buttons, or the Joystick/Sliders/IK mode is picked with
+--mode at startup):
+    Joystick - drive motors 1-6 from a joystick (same mapping as before):
+        Axis 0 -> Motor 1 (base), Axis 1 -> Motor 2 (shoulder),
+        Hat 0 Y -> Motor 3 (elbow), Buttons 2/3 -> Motor 4 (wrist),
+        Axis 2 -> Motor 5 (wrist roll), Button 0 -> Motor 6 (claw)
+    Sliders  - drag on-screen sliders to set each motor's raw angle directly.
+    IK       - drag X/Y/Z/Pitch/Roll sliders to set a target end-effector
+               pose; motors 1-4 are solved with inverse_kinematics() from
+               IK_controller.py. Requires config.json's "geometry"
+               to be measured first (see IK_controller.py).
 
-Joystick mapping:
-    Axis 0 (A0) -> Motor 1 (base)
-        -1.00 = left, 0.00 = centre, +1.00 = right
-    Axis 1 (A1) -> Motor 2 (shoulder)
-        -1.00 = left, 0.00 = centre, +1.00 = right
-    Axis 2 (A2) -> Motor 5
-        -1.00 = left, 0.00 = centre, +1.00 = right
-        (A2 and A3 move together on this stick; only A2 is read)
-    Hat 0 Y (D-pad up/down) -> Motor 3 (elbow)
-        +1 = forward, 0 = centre, -1 = backward
-    Buttons 2/3 -> Motor 4 (wrist)
-        B3=1,B2=0 = forward, B2=1,B3=0 = backward, otherwise = centre
-    Button 0 -> Motor 6 (claw)
-        B0=1 = closed (motor 6 max angle), B0=0 = open (motor 6 min angle)
+Recording: click Record to start capturing every commanded motor pose
+(sampled every frame, so IK's continuously-interpolated motion is captured
+smoothly, not just as keyframes) in whichever mode is active. Click it
+again to stop and save the macro to scripts/macros/. Select a saved macro
+(click it, or press 1-9) and click Play to replay it over serial exactly as
+recorded, in real time, in any mode - live control resumes automatically
+when playback finishes.
 
 Requires:
     pip install pygame pyserial
@@ -28,12 +30,14 @@ Requires:
 Usage:
     python controller.py --list-ports          # find your Arduino's port
     python controller.py --port COM6
-    python controller.py --port COM6 --device 0 --rate 30
+    python controller.py --port COM6 --mode slider
 """
 
 import argparse
+import json
 import sys
 import time
+from pathlib import Path
 
 try:
     import pygame
@@ -48,30 +52,47 @@ except ImportError:
     print("pyserial is not installed. Install it with: pip install pyserial")
     sys.exit(1)
 
-from motor_config import load_motor_config
+from motor_config import load_motor_config, load_geometry
+from IK_controller import inverse_kinematics
+from slider_controller import Slider
 
+MACROS_DIR = Path(__file__).resolve().parent / "macros"
 
-# Joystick axes
+# ---- Joystick wiring (Joystick mode only) ----
 AXIS_MOTOR1 = 0
 AXIS_MOTOR2 = 1
 AXIS_MOTOR5 = 2  # A2 and A3 move together on this stick; only A2 is read
-
-# Joystick hat (D-pad) used for motor 3: hat index and its Y-component
 HAT_MOTOR3 = 0
 HAT_MOTOR3_COMPONENT = 1
-
-# Joystick buttons used for motor 4 (forward/backward pair, no centre button)
 BUTTON_MOTOR4_BACKWARD = 2
 BUTTON_MOTOR4_FORWARD = 3
-
-# Joystick button used for motor 6 (claw open/close)
 BUTTON_MOTOR6_CLOSE = 0
-
-# Deadzone for stick axes to avoid jitter near center
 DEADZONE = 0.05
 
 # Descriptions that identify likely Arduino USB-serial adapters, for --port auto-detect
 ARDUINO_HINTS = ("arduino", "ch340", "usb-serial", "usb serial", "cp210", "ftdi")
+
+# ---- Window layout ----
+WINDOW_WIDTH, WINDOW_HEIGHT = 560, 680
+MODE_BUTTON_Y = 56
+TRANSPORT_BUTTON_Y = 100
+MACRO_LIST_Y = 138
+MACRO_ROW_H = 16
+MACRO_LIST_MAX = 6
+MARGIN_TOP = 250
+ROW_HEIGHT = 60
+# Note: Slider (imported from slider_controller) draws using slider_controller's
+# own SLIDER_X/SLIDER_WIDTH/KNOB_RADIUS module constants, not ones defined here.
+
+BG_COLOR = (30, 30, 30)
+TEXT_COLOR = (230, 230, 230)
+STATUS_COLOR = (150, 150, 150)
+WARN_COLOR = (240, 140, 60)
+BUTTON_COLOR = (70, 70, 70)
+BUTTON_HOVER_COLOR = (100, 100, 100)
+BUTTON_ACTIVE_COLOR = (60, 120, 90)
+BUTTON_RECORD_COLOR = (150, 50, 50)
+MACRO_SELECTED_COLOR = (80, 130, 180)
 
 
 def axis_to_angle(value, lo, hi, deadzone=DEADZONE):
@@ -115,12 +136,104 @@ def autodetect_port():
     return None
 
 
+def geometry_ready(geometry):
+    return geometry.get("upperArmLength", 0) != 0 and geometry.get("forearmLength", 0) != 0
+
+
+def joystick_commands(js, motors):
+    """Read the joystick and return {channel: angle} for all 6 motors."""
+    motor1_val = js.get_axis(AXIS_MOTOR1) if js.get_numaxes() > AXIS_MOTOR1 else 0.0
+    motor2_val = js.get_axis(AXIS_MOTOR2) if js.get_numaxes() > AXIS_MOTOR2 else 0.0
+    motor3_val = js.get_hat(HAT_MOTOR3)[HAT_MOTOR3_COMPONENT] if js.get_numhats() > HAT_MOTOR3 else 0.0
+    motor5_val = js.get_axis(AXIS_MOTOR5) if js.get_numaxes() > AXIS_MOTOR5 else 0.0
+
+    motor4_forward = js.get_button(BUTTON_MOTOR4_FORWARD) if js.get_numbuttons() > BUTTON_MOTOR4_FORWARD else 0
+    motor4_backward = js.get_button(BUTTON_MOTOR4_BACKWARD) if js.get_numbuttons() > BUTTON_MOTOR4_BACKWARD else 0
+    if motor4_forward and not motor4_backward:
+        motor4_val = 1.0
+    elif motor4_backward and not motor4_forward:
+        motor4_val = -1.0
+    else:
+        motor4_val = 0.0
+
+    motor6_close = js.get_button(BUTTON_MOTOR6_CLOSE) if js.get_numbuttons() > BUTTON_MOTOR6_CLOSE else 0
+    if motors[6]["invert"]:
+        motor6_close = not motor6_close
+    motor6_angle = motors[6]["max"] if motor6_close else motors[6]["min"]
+
+    if motors[1]["invert"]:
+        motor1_val = -motor1_val
+    if motors[2]["invert"]:
+        motor2_val = -motor2_val
+    if motors[3]["invert"]:
+        motor3_val = -motor3_val
+    if motors[4]["invert"]:
+        motor4_val = -motor4_val
+    if motors[5]["invert"]:
+        motor5_val = -motor5_val
+
+    return {
+        motors[1]["channel"]: axis_to_angle(motor1_val, motors[1]["min"], motors[1]["max"]),
+        motors[2]["channel"]: axis_to_angle(motor2_val, motors[2]["min"], motors[2]["max"]),
+        motors[3]["channel"]: axis_to_angle(motor3_val, motors[3]["min"], motors[3]["max"]),
+        motors[4]["channel"]: axis_to_angle(motor4_val, motors[4]["min"], motors[4]["max"]),
+        motors[5]["channel"]: axis_to_angle(motor5_val, motors[5]["min"], motors[5]["max"]),
+        motors[6]["channel"]: motor6_angle,
+    }
+
+
+def list_macros():
+    if not MACROS_DIR.exists():
+        return []
+    return sorted(MACROS_DIR.glob("*.json"), key=lambda p: p.name, reverse=True)
+
+
+def save_macro(steps):
+    MACROS_DIR.mkdir(exist_ok=True)
+    path = MACROS_DIR / f"macro_{time.strftime('%Y%m%d_%H%M%S')}.json"
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"created": time.strftime("%Y-%m-%d %H:%M:%S"), "steps": steps}, f)
+    return path
+
+
+def load_macro(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f).get("steps", [])
+
+
+class Button:
+    def __init__(self, rect, label):
+        self.rect = pygame.Rect(rect)
+        self.label = label
+
+    def hit(self, pos):
+        return self.rect.collidepoint(pos)
+
+    def draw(self, surface, font, active=False, color=None):
+        bg = color if color else (BUTTON_ACTIVE_COLOR if active else
+                                   (BUTTON_HOVER_COLOR if self.rect.collidepoint(pygame.mouse.get_pos()) else BUTTON_COLOR))
+        pygame.draw.rect(surface, bg, self.rect, border_radius=6)
+        text = font.render(self.label, True, TEXT_COLOR)
+        surface.blit(text, text.get_rect(center=self.rect.center))
+
+
+def send(ser, commands, last_sent):
+    """Send commands (channel:angle) over serial if changed from last_sent. Returns the new last_sent."""
+    if commands != last_sent:
+        if ser is not None:
+            line = ",".join(f"{ch}:{ang}" for ch, ang in commands.items())
+            ser.write((line + "\n").encode("ascii"))
+        return dict(commands)
+    return last_sent
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Joystick -> Arduino motor controller over USB serial.")
+    parser = argparse.ArgumentParser(description="Unified joystick/slider/IK arm controller with macro recording, over USB serial.")
     parser.add_argument("--device", type=int, default=0, help="Joystick index to use (default 0)")
-    parser.add_argument("--port", type=str, default=None, help="Serial port, e.g. COM6 or /dev/ttyUSB0 (auto-detected if omitted)")
+    parser.add_argument("--port", type=str, default=None, help="Serial port, e.g. COM6 (auto-detected if omitted)")
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate (default 115200, must match .ino)")
-    parser.add_argument("--rate", type=float, default=20, help="Update rate in Hz (default 20)")
+    parser.add_argument("--rate", type=float, default=30, help="Update rate in Hz (default 30)")
+    parser.add_argument("--mode", choices=["joystick", "slider", "ik"], default=None, help="Initial mode (default: joystick if one is found, else sliders)")
     parser.add_argument("--list", action="store_true", help="List joystick devices and exit")
     parser.add_argument("--list-ports", action="store_true", help="List serial ports and exit")
     args = parser.parse_args()
@@ -128,116 +241,256 @@ def main():
     if args.list:
         list_joysticks()
         return
-
     if args.list_ports:
         list_serial_ports()
         return
 
+    motors = load_motor_config()
+    geometry = load_geometry()
+
     pygame.init()
     pygame.joystick.init()
-
-    count = pygame.joystick.get_count()
-    if count == 0:
-        print("No joystick/controller devices found. Plug one in and try again.")
-        return
-    if args.device >= count:
-        print(f"Device index {args.device} out of range (only {count} found). Run --list to see options.")
-        return
-
-    js = pygame.joystick.Joystick(args.device)
-    js.init()
-    print(f"Using joystick: {js.get_name()}")
-
-    motors = load_motor_config()
-    for n in sorted(motors):
-        m = motors[n]
-        print(f"Motor {n}: channel={m['channel']} range={m['min']}-{m['max']} "
-              f"rest={m['rest']} invert={m['invert']}")
+    js = None
+    if pygame.joystick.get_count() > args.device:
+        js = pygame.joystick.Joystick(args.device)
+        js.init()
+        print(f"Using joystick: {js.get_name()}")
+    else:
+        print("No joystick found - Joystick mode will be unavailable.")
 
     port = args.port or autodetect_port()
-    if not port:
-        print("No --port specified and no Arduino-like serial port found. Use --list-ports to see options.")
-        return
+    ser = None
+    if port:
+        try:
+            ser = serial.Serial(port, args.baud, timeout=1)
+            time.sleep(2)  # give the Arduino time to reset after the serial connection opens
+            status = f"Connected to {port} @ {args.baud} baud."
+        except serial.SerialException as e:
+            status = f"Could not open {port}: {e}"
+    else:
+        status = "No Arduino-like serial port found - display-only mode."
+    print(status)
 
-    try:
-        ser = serial.Serial(port, args.baud, timeout=1)
-    except serial.SerialException as e:
-        print(f"Could not open serial port {port}: {e}")
-        return
+    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    pygame.display.set_caption("Arm Controller")
+    font = pygame.font.SysFont(None, 24)
+    small_font = pygame.font.SysFont(None, 18)
+    clock = pygame.time.Clock()
 
-    # Give the Arduino time to reset after the serial connection opens
-    time.sleep(2)
-    print(f"Connected to {port} @ {args.baud} baud.")
-    print("Sending motor commands. Press Ctrl+C to stop.\n")
+    mode = args.mode or ("joystick" if js else "slider")
 
-    interval = 1.0 / args.rate if args.rate > 0 else 0.05
+    slider_mode_sliders = [
+        Slider(f"Motor {n}", motors[n]["channel"], motors[n]["min"], motors[n]["max"], motors[n]["rest"],
+               MARGIN_TOP + i * ROW_HEIGHT)
+        for i, n in enumerate(sorted(motors))
+    ]
+
+    reach = geometry["upperArmLength"] + geometry["forearmLength"] + geometry["wristLength"]
+    reach = reach if reach > 0 else 300
+    ik_sliders = {
+        "x": Slider("Target X (mm)", None, -reach, reach, 0, MARGIN_TOP + 0 * ROW_HEIGHT),
+        "y": Slider("Target Y (mm)", None, -reach, reach, 0, MARGIN_TOP + 1 * ROW_HEIGHT),
+        "z": Slider("Target Z (mm)", None, 0, reach, geometry["baseHeight"], MARGIN_TOP + 2 * ROW_HEIGHT),
+        "pitch": Slider("Pitch (deg)", None, -90, 90, 0, MARGIN_TOP + 3 * ROW_HEIGHT),
+        "roll": Slider("Roll (motor 5)", motors[5]["channel"], motors[5]["min"], motors[5]["max"], motors[5]["rest"],
+                        MARGIN_TOP + 4 * ROW_HEIGHT),
+    }
+    elbow_down = False
+    claw_closed = False
+    ik_reachable = True
+
+    mode_buttons = {
+        "joystick": Button((30, MODE_BUTTON_Y, 160, 34), "Joystick"),
+        "slider": Button((200, MODE_BUTTON_Y, 160, 34), "Sliders"),
+        "ik": Button((370, MODE_BUTTON_Y, 160, 34), "IK"),
+    }
+    record_button = Button((30, TRANSPORT_BUTTON_Y, 160, 30), "Record")
+    play_button = Button((200, TRANSPORT_BUTTON_Y, 160, 30), "Play")
+    elbow_toggle = Button((30, MARGIN_TOP + 5 * ROW_HEIGHT, 150, 30), "Elbow: Up")
+    claw_toggle = Button((200, MARGIN_TOP + 5 * ROW_HEIGHT, 150, 30), "Claw: Open")
+
+    macros = list_macros()
+    selected_macro_index = 0 if macros else None
+
+    recording = False
+    record_steps = []
+    record_start = 0.0
+
+    playing = False
+    play_steps = []
+    play_start = 0.0
+    play_index = 0
+    play_prev_mode = mode
+
     last_sent = {}
+    last_valid_ik_commands = None
 
+    def macro_row_rect(i):
+        return pygame.Rect(30, MACRO_LIST_Y + i * MACRO_ROW_H, 500, MACRO_ROW_H)
+
+    running = True
     try:
-        while True:
-            pygame.event.pump()
+        while running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    running = False
+                elif event.type == pygame.KEYDOWN and pygame.K_1 <= event.key <= pygame.K_9 and not playing:
+                    idx = event.key - pygame.K_1
+                    if idx < len(macros):
+                        selected_macro_index = idx
+                elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    pos = event.pos
+                    if playing:
+                        if play_button.hit(pos):
+                            playing = False
+                            mode = play_prev_mode
+                    else:
+                        if mode_buttons["joystick"].hit(pos) and js is not None:
+                            mode = "joystick"
+                        elif mode_buttons["slider"].hit(pos):
+                            mode = "slider"
+                        elif mode_buttons["ik"].hit(pos):
+                            mode = "ik"
+                        elif record_button.hit(pos):
+                            if not recording:
+                                recording = True
+                                record_steps = []
+                                record_start = time.time()
+                            else:
+                                recording = False
+                                if record_steps:
+                                    path = save_macro(record_steps)
+                                    print(f"Saved macro: {path.name} ({len(record_steps)} steps)")
+                                    macros = list_macros()
+                                    selected_macro_index = 0
+                        elif play_button.hit(pos) and macros and selected_macro_index is not None:
+                            playing = True
+                            play_steps = load_macro(macros[selected_macro_index])
+                            play_start = time.time()
+                            play_index = 0
+                            play_prev_mode = mode
+                        elif mode == "ik" and elbow_toggle.hit(pos):
+                            elbow_down = not elbow_down
+                        elif mode == "ik" and claw_toggle.hit(pos):
+                            claw_closed = not claw_closed
+                        else:
+                            for i in range(min(len(macros), MACRO_LIST_MAX)):
+                                if macro_row_rect(i).collidepoint(pos):
+                                    selected_macro_index = i
 
-            motor1_val = js.get_axis(AXIS_MOTOR1) if js.get_numaxes() > AXIS_MOTOR1 else 0.0
-            motor2_val = js.get_axis(AXIS_MOTOR2) if js.get_numaxes() > AXIS_MOTOR2 else 0.0
-            motor3_val = js.get_hat(HAT_MOTOR3)[HAT_MOTOR3_COMPONENT] if js.get_numhats() > HAT_MOTOR3 else 0.0
-            motor5_val = js.get_axis(AXIS_MOTOR5) if js.get_numaxes() > AXIS_MOTOR5 else 0.0
+                if not playing:
+                    if mode == "slider":
+                        for s in slider_mode_sliders:
+                            s.handle_event(event)
+                    elif mode == "ik":
+                        for s in ik_sliders.values():
+                            s.handle_event(event)
 
-            motor4_forward = js.get_button(BUTTON_MOTOR4_FORWARD) if js.get_numbuttons() > BUTTON_MOTOR4_FORWARD else 0
-            motor4_backward = js.get_button(BUTTON_MOTOR4_BACKWARD) if js.get_numbuttons() > BUTTON_MOTOR4_BACKWARD else 0
-            if motor4_forward and not motor4_backward:
-                motor4_val = 1.0
-            elif motor4_backward and not motor4_forward:
-                motor4_val = -1.0
+            # ---- compute + send this frame's commands ----
+            if playing:
+                elapsed = time.time() - play_start
+                while play_index < len(play_steps) and play_steps[play_index]["t"] <= elapsed:
+                    commands = {int(ch): ang for ch, ang in play_steps[play_index]["commands"].items()}
+                    last_sent = send(ser, commands, last_sent)
+                    play_index += 1
+                if play_index >= len(play_steps):
+                    playing = False
+                    mode = play_prev_mode
             else:
-                motor4_val = 0.0
+                commands = None
+                if mode == "joystick" and js is not None:
+                    commands = joystick_commands(js, motors)
+                elif mode == "slider":
+                    commands = {s.channel: s.angle for s in slider_mode_sliders}
+                elif mode == "ik":
+                    if geometry_ready(geometry):
+                        sol = inverse_kinematics(
+                            motors, geometry,
+                            ik_sliders["x"].angle, ik_sliders["y"].angle, ik_sliders["z"].angle,
+                            pitch_deg=ik_sliders["pitch"].angle, elbow_down=elbow_down,
+                        )
+                        if sol is not None:
+                            ik_reachable = True
+                            commands = {motors[n]["channel"]: a for n, a in sol.items()}
+                            commands[motors[5]["channel"]] = ik_sliders["roll"].angle
+                            commands[motors[6]["channel"]] = motors[6]["max"] if claw_closed else motors[6]["min"]
+                            last_valid_ik_commands = commands
+                        else:
+                            ik_reachable = False
+                            commands = last_valid_ik_commands  # hold last good pose
 
-            motor6_close = js.get_button(BUTTON_MOTOR6_CLOSE) if js.get_numbuttons() > BUTTON_MOTOR6_CLOSE else 0
-            if motors[6]["invert"]:
-                motor6_close = not motor6_close
-            motor6_angle = motors[6]["max"] if motor6_close else motors[6]["min"]
+                if commands is not None:
+                    last_sent = send(ser, commands, last_sent)
+                    if recording:
+                        record_steps.append({
+                            "t": time.time() - record_start,
+                            "commands": {str(ch): ang for ch, ang in commands.items()},
+                        })
 
-            if motors[1]["invert"]:
-                motor1_val = -motor1_val
-            if motors[2]["invert"]:
-                motor2_val = -motor2_val
-            if motors[3]["invert"]:
-                motor3_val = -motor3_val
-            if motors[4]["invert"]:
-                motor4_val = -motor4_val
-            if motors[5]["invert"]:
-                motor5_val = -motor5_val
+            # ---- draw ----
+            screen.fill(BG_COLOR)
+            screen.blit(font.render("Arm Controller", True, TEXT_COLOR), (20, 16))
+            screen.blit(small_font.render(status, True, STATUS_COLOR), (20, 40))
 
-            motor1_angle = axis_to_angle(motor1_val, motors[1]["min"], motors[1]["max"])
-            motor2_angle = axis_to_angle(motor2_val, motors[2]["min"], motors[2]["max"])
-            motor3_angle = axis_to_angle(motor3_val, motors[3]["min"], motors[3]["max"])
-            motor4_angle = axis_to_angle(motor4_val, motors[4]["min"], motors[4]["max"])
-            motor5_angle = axis_to_angle(motor5_val, motors[5]["min"], motors[5]["max"])
+            for name, btn in mode_buttons.items():
+                enabled = name != "joystick" or js is not None
+                btn.draw(screen, font, active=(mode == name), color=(None if enabled else (50, 50, 50)))
 
-            commands = {
-                motors[1]["channel"]: motor1_angle,
-                motors[2]["channel"]: motor2_angle,
-                motors[3]["channel"]: motor3_angle,
-                motors[4]["channel"]: motor4_angle,
-                motors[5]["channel"]: motor5_angle,
-                motors[6]["channel"]: motor6_angle,
-            }
+            record_button.label = f"Recording... {time.time() - record_start:.1f}s" if recording else "Record"
+            record_button.draw(screen, font, color=(BUTTON_RECORD_COLOR if recording else None))
+            play_button.label = "Stop" if playing else "Play"
+            play_button.draw(screen, font, active=playing)
 
-            # Only send a line if something changed, to keep serial traffic light
-            if commands != last_sent:
-                line = ",".join(f"{ch}:{ang}" for ch, ang in commands.items())
-                ser.write((line + "\n").encode("ascii"))
-                last_sent = commands
+            for i, path in enumerate(macros[:MACRO_LIST_MAX]):
+                row = macro_row_rect(i)
+                if i == selected_macro_index:
+                    pygame.draw.rect(screen, MACRO_SELECTED_COLOR, row, border_radius=3)
+                screen.blit(small_font.render(f"{i + 1}. {path.stem}", True, TEXT_COLOR), (row.x + 4, row.y))
+            if not macros:
+                screen.blit(small_font.render("No macros recorded yet.", True, STATUS_COLOR), (30, MACRO_LIST_Y))
 
-            print(f"motor1:{motor1_angle:3d} motor2:{motor2_angle:3d} "
-                  f"motor3:{motor3_angle:3d} motor4:{motor4_angle:3d} motor5:{motor5_angle:3d} "
-                  f"claw:{'closed' if motor6_close else 'open':6s}", end="\r", flush=True)
+            if mode == "slider":
+                for s in slider_mode_sliders:
+                    s.draw(screen, font)
+            elif mode == "ik":
+                if not geometry_ready(geometry):
+                    screen.blit(small_font.render(
+                        "Geometry not measured - fill in config.json's \"geometry\" section.",
+                        True, WARN_COLOR), (20, MARGIN_TOP - 20))
+                else:
+                    for s in ik_sliders.values():
+                        s.draw(screen, font)
+                    if not ik_reachable:
+                        screen.blit(small_font.render("Target unreachable - holding last valid pose.", True, WARN_COLOR),
+                                    (20, MARGIN_TOP + 5 * ROW_HEIGHT - 18))
+                    elbow_toggle.label = f"Elbow: {'Down' if elbow_down else 'Up'}"
+                    elbow_toggle.draw(screen, small_font)
+                    claw_toggle.label = f"Claw: {'Closed' if claw_closed else 'Open'}"
+                    claw_toggle.draw(screen, small_font)
+            elif mode == "joystick":
+                if js is None:
+                    screen.blit(small_font.render("No joystick connected.", True, WARN_COLOR), (20, MARGIN_TOP - 20))
+                elif last_sent:
+                    channel_to_motor = {m["channel"]: n for n, m in motors.items()}
+                    y = MARGIN_TOP
+                    for ch, ang in sorted(last_sent.items()):
+                        n = channel_to_motor.get(ch, "?")
+                        screen.blit(font.render(f"Motor {n} (ch {ch}): {ang}", True, TEXT_COLOR), (20, y))
+                        y += 28
 
-            time.sleep(interval)
-    except KeyboardInterrupt:
-        print("\nStopped.")
+            if playing:
+                screen.blit(small_font.render(f"Playing... step {play_index}/{len(play_steps)}", True, STATUS_COLOR),
+                            (370, TRANSPORT_BUTTON_Y + 8))
+
+            pygame.display.flip()
+            clock.tick(args.rate if args.rate > 0 else 30)
     finally:
-        ser.close()
-        js.quit()
+        if ser is not None:
+            ser.close()
+        if js is not None:
+            js.quit()
         pygame.joystick.quit()
         pygame.quit()
 

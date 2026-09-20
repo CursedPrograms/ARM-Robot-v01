@@ -5,7 +5,7 @@ USB serial, talking to the Arduino running scripts/arm/arm.ino. No joystick
 required.
 
 Per-motor servo channel, angle range, and resting angle come from
-scripts/config.json (see motor_config.py) - edit that file to tune the arm's
+config.json (see motor_config.py) - edit that file to tune the arm's
 physical limits without touching this script.
 
 Drag each slider with the mouse to set that motor's angle. The current angle
@@ -118,7 +118,8 @@ class Slider:
         pygame.draw.rect(surface, TRACK_COLOR, track_rect, border_radius=3)
         pygame.draw.circle(surface, KNOB_COLOR, (self.value_to_x(), self.y), KNOB_RADIUS)
 
-        label_surf = font.render(f"{self.label} (ch {self.channel}, {self.lo}-{self.hi})", True, TEXT_COLOR)
+        channel_part = f"ch {self.channel}, " if self.channel is not None else ""
+        label_surf = font.render(f"{self.label} ({channel_part}{self.lo}-{self.hi})", True, TEXT_COLOR)
         surface.blit(label_surf, (20, self.y - 10))
 
         value_surf = font.render(f"{self.angle:3d}", True, TEXT_COLOR)

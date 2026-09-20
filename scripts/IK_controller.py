@@ -4,7 +4,7 @@ IK_controller.py - Inverse/forward kinematics for the arm, driving motors
 1-4 (base, shoulder, elbow, wrist pitch) to reach a target (x, y, z)
 position over USB serial, talking to the Arduino running scripts/arm/arm.ino.
 
-Physical role of each motor (see scripts/config.json / motor_config.py for
+Physical role of each motor (see config.json / motor_config.py for
 channel/range/rest/invert):
     Motor 1 - base rotation (yaw, about the vertical axis)
     Motor 2 - shoulder (pitch)
@@ -18,7 +18,7 @@ Coordinate frame (millimetres):
     +Z is up. X/Y are horizontal; the arm's shoulder/elbow/wrist all move
     in the single vertical plane selected by the base's yaw rotation.
 
-This script needs scripts/config.json's "geometry" section filled in
+This script needs config.json's "geometry" section filled in
 (baseHeight, upperArmLength, forearmLength, wristLength, all in mm) before
 it can compute anything real - those are 0 placeholders until measured.
 Each motor's "kinematicSign" (1 or -1) says whether increasing that
@@ -75,7 +75,7 @@ def check_geometry(geometry):
     """Refuse to do IK/FK math against unmeasured (zero-length) geometry."""
     missing = [k for k in ("upperArmLength", "forearmLength") if geometry.get(k, 0) == 0]
     if missing:
-        print(f"Geometry not measured yet: {', '.join(missing)} are 0 in scripts/config.json's "
+        print(f"Geometry not measured yet: {', '.join(missing)} are 0 in config.json's "
               f"\"geometry\" section. Measure the arm and fill those in before using IK/FK.")
         return False
     return True

@@ -38,3 +38,6 @@ __pycache__/joystick_test.cpython-312.pyc
 
 # Logs
 logs/
+
+# Recorded arm motion macros
+scripts/macros/

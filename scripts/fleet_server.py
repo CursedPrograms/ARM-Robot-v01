@@ -11,7 +11,7 @@ registry so this arm shows up in the dashboard, same wire protocol as
 RIFT's Fleet/register.py.
 
 Per-motor servo channel, angle range, resting angle, and invert flag come
-from scripts/config.json (see motor_config.py), same as controller.py and
+from config.json (see motor_config.py), same as controller.py and
 slider_controller.py.
 
 Requires:

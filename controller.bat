@@ -1,5 +1,5 @@
 @echo off
-cd /d "%~dp0"
+cd /d "%~dp0scripts"
 
 where py >nul 2>nul
 if %errorlevel%==0 (

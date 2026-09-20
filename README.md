@@ -23,7 +23,7 @@ python scripts/fleet_server.py --list-ports          # find the Arduino's port
 python scripts/fleet_server.py --serial-port COM6
 ```
 
-Per-motor servo channel, angle range, resting angle, and invert flag all come from `scripts/config.json` (see `scripts/motor_config.py`) - the same config `controller.py` and `slider_controller.py` use.
+Per-motor servo channel, angle range, resting angle, and invert flag all come from `config.json` (see `scripts/motor_config.py`) - the same config `controller.py` and `slider_controller.py` use. `.bat` launchers (`run.bat`, `controller.bat`, `slider_controller.bat`, `fleet_server.bat`, `run_joystick_test.bat`) live at the repo root alongside `config.json`; the Python scripts themselves stay in `scripts/`.
 
 ---
 

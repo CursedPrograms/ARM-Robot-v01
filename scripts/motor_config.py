@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-motor_config.py - Shared motor configuration, loaded from scripts/config.json.
+motor_config.py - Shared motor configuration, loaded from config.json at the
+repo root.
 
 Every motor-driving script (controller.py, slider_controller.py, and any
 future one) should call load_motor_config() instead of hardcoding its own
@@ -11,7 +12,7 @@ config.json stays the single source of truth for the arm's physical limits.
 import json
 from pathlib import Path
 
-CONFIG_PATH = Path(__file__).resolve().parent / "config.json"
+CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.json"
 
 # Fallback per-motor settings, used for any motor missing from config.json
 # (or if the file itself is missing/unreadable).
