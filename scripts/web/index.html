@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ARM Fleet Control</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>ARM Fleet Control</h1>
+      <div class="status">
+        <span class="dot" id="statusDot"></span>
+        <span id="statusText">Connecting...</span>
+      </div>
+    </header>
+
+    <main id="motorList" class="motor-list">
+      <p class="loading">Loading motors...</p>
+    </main>
+
+    <footer>
+      <button id="resetAllBtn" class="btn btn-reset">Reset All</button>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -17,6 +17,8 @@
 
 This arm can join the [RIFT](https://github.com/CursedPrograms/RIFT) fleet dashboard, the same way MILA/WHIP/NORA/KIDA do. `controller.py`'s Fleet mode bridges RIFT's HTTP protocol to the Arduino's USB serial connection: it serves `/status`, `/cmd?motor=&angle=`, and `/reset`, and heartbeats a `/register` call to RIFT/NORA so this arm ("ARM", port `5011`) shows up in the dashboard.
 
+The same HTTP server also serves a small web control page (`scripts/web/index.html`/`style.css`/`app.js`) at `/` - open `http://<this machine's IP>:5011/` in any browser on the network for a per-motor slider UI, no RIFT required.
+
 ```bash
 pip install -r requirements.txt
 python scripts/controller.py --list-ports              # find the Arduino's port

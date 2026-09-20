@@ -43,6 +43,7 @@ Usage:
 
 import argparse
 import json
+import socket
 import sys
 import threading
 import time
@@ -66,6 +67,7 @@ from IK_controller import inverse_kinematics
 from slider_controller import Slider
 
 MACROS_DIR = Path(__file__).resolve().parent / "macros"
+WEB_DIR = Path(__file__).resolve().parent / "web"
 
 # ---- Joystick wiring (Joystick mode only) ----
 AXIS_MOTOR1 = 0
@@ -151,6 +153,20 @@ def autodetect_port():
         if any(hint in p.description.lower() for hint in ARDUINO_HINTS):
             return p.device
     return None
+
+
+def local_lan_ip():
+    """Best-effort LAN IP for this machine, so Fleet mode can show an address
+    RIFT (on another device) can actually reach - "0.0.0.0" (what the server
+    binds to) isn't one. Doesn't actually send any traffic."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
 
 
 def geometry_ready(geometry):
@@ -264,10 +280,16 @@ def start_fleet_heartbeat(rift_host, rift_port, interval=FLEET_HEARTBEAT_SECS):
 
 def create_fleet_app(motors, fleet_state, fleet_lock, connected):
     """Flask app bridging RIFT's HTTP protocol to fleet_state["angles"], which
-    the main loop reads each frame and sends over serial like any other mode."""
-    from flask import Flask, jsonify, request
+    the main loop reads each frame and sends over serial like any other mode.
+    Also serves the web/ control page (HTML/CSS/JS) at "/", so the arm can be
+    driven from any browser on the network, not just RIFT."""
+    from flask import Flask, jsonify, request, send_from_directory
 
-    app = Flask(__name__)
+    app = Flask(__name__, static_folder=str(WEB_DIR), static_url_path="")
+
+    @app.route("/")
+    def index():
+        return send_from_directory(WEB_DIR, "index.html")
 
     @app.route("/ping")
     def ping():
@@ -427,6 +449,8 @@ def main():
     elbow_down = False
     claw_closed = False
     ik_reachable = True
+
+    fleet_lan_ip = local_lan_ip()
 
     fleet_lock = threading.Lock()
     fleet_state = {"angles": {n: motors[n]["rest"] for n in motors}}
@@ -630,7 +654,7 @@ def main():
                     screen.blit(small_font.render(fleet_status["error"], True, WARN_COLOR), (20, MARGIN_TOP - 20))
                 else:
                     screen.blit(small_font.render(
-                        f"Serving http://0.0.0.0:{args.fleet_port}  (/status, /cmd?motor=&angle=, /reset)"
+                        f"Open http://{fleet_lan_ip}:{args.fleet_port} in a browser to control"
                         + ("" if args.no_register else f"  -  heartbeating to RIFT at {args.rift_host}:{args.rift_port}"),
                         True, STATUS_COLOR), (20, MARGIN_TOP - 20))
                     y = MARGIN_TOP
