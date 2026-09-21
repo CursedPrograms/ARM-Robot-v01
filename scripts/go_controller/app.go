@@ -11,7 +11,6 @@ package main
 
 import (
 	"fmt"
-	"image/color"
 	"math"
 	"path/filepath"
 	"sort"
@@ -249,7 +248,7 @@ func (a *App) buildUI() fyne.CanvasObject {
 	}
 	macroBox := container.NewGridWrap(fyne.NewSize(560, 84), a.macroList)
 
-	a.warnText = canvas.NewText("", color.NRGBA{R: 240, G: 140, B: 60, A: 255})
+	a.warnText = canvas.NewText("", schemeColour("warn"))
 	a.warnText.TextSize = 12
 
 	a.sliderBox = container.NewVBox()
@@ -680,6 +679,7 @@ func (a *App) tick() {
 
 func (a *App) run() {
 	a.fyneApp = app.NewWithID("io.github.cursedprograms.arm-controller")
+	a.fyneApp.Settings().SetTheme(newSchemeTheme())
 	a.win = a.fyneApp.NewWindow("Arm Controller (Go)")
 	a.win.SetContent(container.NewPadded(a.buildUI()))
 	a.win.Resize(fyne.NewSize(620, 720))

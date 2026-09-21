@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <thread>
 
 namespace {
 
@@ -59,14 +61,43 @@ std::vector<PortInfo> listSerialPorts() {
     return ports;
 }
 
-std::string autodetectPort() {
-    for (const auto& p : listSerialPorts()) {
-        std::string lower = toLower(p.description);
-        for (const char* hint : ARDUINO_HINTS) {
-            if (lower.find(hint) != std::string::npos) return p.device;
-        }
+namespace {
+
+bool looksLikeArduino(const PortInfo& p) {
+    std::string lower = toLower(p.description);
+    for (const char* hint : ARDUINO_HINTS) {
+        if (lower.find(hint) != std::string::npos) return true;
     }
-    return "";
+    return false;
+}
+
+// True if the board on `device` answers "WHO" with "I am Arm".
+bool answersIAmArm(const std::string& device) {
+    SerialPort port;
+    if (!port.open(device, 115200).empty()) return false; // busy or unusable
+    std::this_thread::sleep_for(std::chrono::seconds(2)); // board resets when the port opens
+    port.flushInput();
+    port.writeLine("WHO");
+    std::string buf;
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+    while (std::chrono::steady_clock::now() < deadline) {
+        buf += port.readAvailable();
+        if (toLower(buf).find("i am arm") != std::string::npos) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return false;
+}
+
+} // namespace
+
+std::string autodetectPort() {
+    std::string firstGuess;
+    for (const auto& p : listSerialPorts()) {
+        if (!looksLikeArduino(p)) continue;
+        if (answersIAmArm(p.device)) return p.device;
+        if (firstGuess.empty()) firstGuess = p.device;
+    }
+    return firstGuess;
 }
 
 SerialPort::~SerialPort() { close(); }
@@ -117,6 +148,18 @@ void SerialPort::close() {
         CloseHandle(static_cast<HANDLE>(handle_));
         handle_ = nullptr;
     }
+}
+
+std::string SerialPort::readAvailable() {
+    if (!handle_) return "";
+    char buf[256];
+    DWORD got = 0;
+    if (!ReadFile(static_cast<HANDLE>(handle_), buf, sizeof(buf), &got, nullptr)) return "";
+    return std::string(buf, got);
+}
+
+void SerialPort::flushInput() {
+    if (handle_) PurgeComm(static_cast<HANDLE>(handle_), PURGE_RXCLEAR);
 }
 
 void SerialPort::writeLine(const std::string& line) {

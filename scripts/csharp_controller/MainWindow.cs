@@ -109,6 +109,8 @@ public sealed class MainWindow : Window
         Width = WindowWidth;
         Height = WindowHeight;
         CanResize = false;
+        Background = ColourScheme.Brush("background");
+        Foreground = ColourScheme.Brush("text");
 
         _motors = Config.LoadMotors();
         _geometry = Config.LoadGeometry();
@@ -203,7 +205,7 @@ public sealed class MainWindow : Window
         {
             FontSize = 12,
             TextWrapping = Avalonia.Media.TextWrapping.Wrap,
-            Foreground = Avalonia.Media.Brushes.Orange,
+            Foreground = ColourScheme.Brush("warn"),
         }, 20, MarginTop - 38, 540, 34);
 
         int row = 0;

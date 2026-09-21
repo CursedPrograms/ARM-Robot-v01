@@ -54,7 +54,9 @@ void loop() {
   if (Serial.available()) {
     String line = Serial.readStringUntil('\n');
     line.trim();
-    if (line.length() > 0) {
+    if (line.equalsIgnoreCase("WHO")) {
+      Serial.println("I am Arm");  // lets the PC find this board by name
+    } else if (line.length() > 0) {
       applyCommandLine(line);
     }
   }

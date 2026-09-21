@@ -1,13 +1,14 @@
 :root {
-  --bg: #1e1e1e;
-  --panel: #2a2a2a;
-  --text: #e6e6e6;
-  --text-dim: #969696;
-  --accent: #3c785a;
-  --accent-hover: #56a37c;
+  /* Defaults - app.js overrides these from colour_scheme.xml when it loads. */
+  --bg: #33292F;
+  --panel: #331F2B;
+  --text: #FFFFFF;
+  --text-dim: #C9B6C1;
+  --accent: #9C0060;
+  --accent-hover: #C21F82;
   --danger: #963232;
-  --danger-hover: #ad3a3a;
-  --border: #3a3a3a;
+  --danger-hover: #AD3A3A;
+  --border: #361529;
 }
 
 * {

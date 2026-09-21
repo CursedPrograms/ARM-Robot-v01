@@ -49,6 +49,7 @@ except ImportError:
     sys.exit(1)
 
 from motor_config import load_motor_config, load_geometry
+from board_id import find_board
 
 # Descriptions that identify likely Arduino USB-serial adapters, for --port auto-detect
 ARDUINO_HINTS = ("arduino", "ch340", "usb-serial", "usb serial", "cp210", "ftdi")
@@ -65,6 +66,9 @@ def list_serial_ports():
 
 
 def autodetect_port():
+    port = find_board("arm", 115200)  # board answers "WHO" with "I am Arm"
+    if port:
+        return port
     for p in list_ports.comports():
         if any(hint in p.description.lower() for hint in ARDUINO_HINTS):
             return p.device

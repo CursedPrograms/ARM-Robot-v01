@@ -17,6 +17,7 @@ use crate::options::{Mode, Options};
 use crate::remote::RemoteArm;
 use crate::serial_link::{self, SerialLink};
 use crate::shared::{lock, merge_local, Shared, SharedState};
+use crate::scheme::colour;
 use eframe::egui;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -33,8 +34,6 @@ const BUTTON_MOTOR4_BACKWARD: i32 = 2;
 const BUTTON_MOTOR4_FORWARD: i32 = 3;
 const BUTTON_MOTOR6_CLOSE: i32 = 0;
 const DEADZONE: f64 = 0.05;
-
-const WARN_COLOR: egui::Color32 = egui::Color32::from_rgb(240, 140, 60);
 
 #[derive(Default)]
 struct IkState {
@@ -526,7 +525,7 @@ impl App {
             };
             let mut record = egui::Button::new(record_label).min_size(egui::vec2(150.0, 28.0));
             if self.recording {
-                record = record.fill(egui::Color32::from_rgb(150, 50, 50));
+                record = record.fill(colour("danger"));
             }
             record_clicked = ui.add_enabled(!self.playing, record).clicked();
 
@@ -557,7 +556,7 @@ impl App {
 
         ui.add_space(6.0);
         if !self.warn.is_empty() {
-            ui.colored_label(WARN_COLOR, &self.warn);
+            ui.colored_label(colour("warn"), &self.warn);
         }
         ui.spacing_mut().slider_width = 320.0;
 

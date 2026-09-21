@@ -4,6 +4,7 @@ package main
 // the same as every other controller: "channel:angle,channel:angle,...\n".
 
 import (
+	"bufio"
 	"fmt"
 	"strings"
 	"sync"
@@ -84,24 +85,60 @@ func listPorts() []PortInfo {
 	return ports
 }
 
+// answersIAmArm asks the board on `name` "WHO" and reports whether it replies
+// "I am Arm" (arm.ino), so DREAM's board on the same PC isn't picked by mistake.
+func answersIAmArm(name string) bool {
+	port, err := serial.Open(name, &serial.Mode{BaudRate: 115200})
+	if err != nil {
+		return false // busy or unusable
+	}
+	defer port.Close()
+	_ = port.SetDTR(true)
+	time.Sleep(2 * time.Second) // board resets when the port opens
+	_ = port.ResetInputBuffer()
+	_, _ = port.Write([]byte("WHO\n"))
+	_ = port.SetReadTimeout(300 * time.Millisecond)
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	r := bufio.NewReader(port)
+	for time.Now().Before(deadline) {
+		line, _ := r.ReadString('\n')
+		if strings.Contains(strings.ToLower(line), "i am arm") {
+			return true
+		}
+	}
+	return false
+}
+
+// autodetectPort prefers the port that answers "I am Arm"; otherwise falls
+// back to the first likely Arduino USB-serial adapter.
 func autodetectPort() string {
 	details, err := enumerator.GetDetailedPortsList()
 	if err != nil {
 		return ""
 	}
+	var candidates []string
 	for _, d := range details {
 		if !d.IsUSB {
 			continue
 		}
 		text := strings.ToLower(d.Product)
-		if arduinoVIDs[strings.ToUpper(d.VID)] {
-			return d.Name
-		}
+		match := arduinoVIDs[strings.ToUpper(d.VID)]
 		for _, hint := range arduinoHints {
 			if strings.Contains(text, hint) {
-				return d.Name
+				match = true
 			}
 		}
+		if match {
+			candidates = append(candidates, d.Name)
+		}
+	}
+	for _, name := range candidates {
+		if answersIAmArm(name) {
+			return name
+		}
+	}
+	if len(candidates) > 0 {
+		return candidates[0]
 	}
 	return ""
 }

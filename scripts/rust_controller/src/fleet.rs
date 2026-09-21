@@ -4,7 +4,7 @@
 //! arm can be driven from any browser on the network. Same endpoints and wire
 //! protocol as controller.py's Flask app and the C++ controller's fleet_server.cpp.
 
-use crate::config::{web_dir, Motors};
+use crate::config::{repo_root, web_dir, Motors};
 use crate::shared::{lock, SharedState};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -115,7 +115,11 @@ fn respond_json(request: tiny_http::Request, status: u16, body: Value) {
 }
 
 fn respond_file(request: tiny_http::Request, name: &str, content_type: &str) {
-    match std::fs::read(web_dir().join(name)) {
+    respond_path(request, web_dir().join(name), content_type)
+}
+
+fn respond_path(request: tiny_http::Request, path: std::path::PathBuf, content_type: &str) {
+    match std::fs::read(path) {
         Ok(bytes) => {
             let _ = request.respond(Response::from_data(bytes).with_header(header("Content-Type", content_type)));
         }
@@ -134,6 +138,7 @@ fn handle(request: tiny_http::Request, motors: &Motors, shared: &SharedState, se
         "/" => respond_file(request, "index.html", "text/html; charset=utf-8"),
         "/style.css" => respond_file(request, "style.css", "text/css; charset=utf-8"),
         "/app.js" => respond_file(request, "app.js", "application/javascript; charset=utf-8"),
+        "/colour_scheme.xml" => respond_path(request, repo_root().join("colour_scheme.xml"), "application/xml; charset=utf-8"),
         "/ping" => {
             let _ = request.respond(
                 Response::from_string(format!("{FLEET_NAME} alive")).with_header(header("Content-Type", "text/plain")),

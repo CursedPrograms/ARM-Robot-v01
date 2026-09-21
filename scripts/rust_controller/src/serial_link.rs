@@ -2,8 +2,8 @@
 //! the same as every other controller: "channel:angle,channel:angle,...\n".
 
 use serialport::{SerialPort, SerialPortType};
-use std::io::Write;
-use std::time::Duration;
+use std::io::{Read, Write};
+use std::time::{Duration, Instant};
 
 /// Descriptions that identify likely Arduino USB-serial adapters, for --port auto-detect.
 const ARDUINO_HINTS: [&str; 5] = ["arduino", "ch340", "usb-serial", "cp210", "ftdi"];
@@ -54,7 +54,48 @@ pub fn list_ports() -> Vec<(String, String)> {
         .collect()
 }
 
+/// True if the board on `name` answers "WHO" with "I am Arm" (arm.ino), so
+/// DREAM's board on the same PC isn't picked by mistake.
+fn answers_i_am_arm(name: &str) -> bool {
+    let Ok(mut port) = serialport::new(name, 115200)
+        .timeout(Duration::from_millis(200))
+        .open()
+    else {
+        return false; // busy or unusable
+    };
+    let _ = port.write_data_terminal_ready(true);
+    std::thread::sleep(Duration::from_secs(2)); // board resets when the port opens
+    let _ = port.clear(serialport::ClearBuffer::Input);
+    if port.write_all(b"WHO\n").is_err() {
+        return false;
+    }
+    let deadline = Instant::now() + Duration::from_millis(1500);
+    let mut seen = String::new();
+    let mut buf = [0u8; 128];
+    while Instant::now() < deadline {
+        if let Ok(n) = port.read(&mut buf) {
+            seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+            if seen.to_lowercase().contains("i am arm") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Prefers the port that answers "I am Arm"; otherwise falls back to the
+/// first likely Arduino USB-serial adapter.
 pub fn autodetect() -> Option<String> {
+    let candidates = arduino_like_ports();
+    candidates
+        .iter()
+        .find(|name| answers_i_am_arm(name))
+        .or_else(|| candidates.first())
+        .cloned()
+}
+
+fn arduino_like_ports() -> Vec<String> {
+    let mut out = Vec::new();
     for p in serialport::available_ports().unwrap_or_default() {
         if let SerialPortType::UsbPort(u) = &p.port_type {
             let text = format!(
@@ -64,9 +105,9 @@ pub fn autodetect() -> Option<String> {
             )
             .to_lowercase();
             if ARDUINO_VIDS.contains(&u.vid) || ARDUINO_HINTS.iter().any(|h| text.contains(h)) {
-                return Some(p.port_name);
+                out.push(p.port_name);
             }
         }
     }
-    None
+    out
 }

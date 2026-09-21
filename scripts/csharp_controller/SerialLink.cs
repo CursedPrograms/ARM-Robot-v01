@@ -61,14 +61,45 @@ public sealed class SerialLink : IDisposable
         return names;
     }
 
+    /// <summary>True if the board on <paramref name="name"/> answers "WHO" with "I am Arm".</summary>
+    static bool AnswersIAmArm(string name)
+    {
+        try
+        {
+            using var sp = new SerialPort(name, 115200) { ReadTimeout = 300, WriteTimeout = 200, DtrEnable = true };
+            sp.Open();
+            Thread.Sleep(2000); // board resets when the port opens
+            sp.DiscardInBuffer();
+            sp.Write("WHO\n");
+            var deadline = DateTime.UtcNow.AddMilliseconds(1500);
+            while (DateTime.UtcNow < deadline)
+            {
+                try
+                {
+                    var line = sp.ReadLine();
+                    if (line.Contains("i am arm", StringComparison.OrdinalIgnoreCase)) return true;
+                }
+                catch (TimeoutException) { }
+            }
+        }
+        catch (Exception) { /* busy or unusable */ }
+        return false;
+    }
+
     /// <summary>
-    /// Best-effort guess at the Arduino's port. System.IO.Ports can't read USB
-    /// descriptions (unlike pyserial), so on Linux this prefers ttyACM*/ttyUSB*,
-    /// and on Windows only auto-picks when there's exactly one COM port.
+    /// Finds the arm's port by asking each port "WHO" and taking the one that
+    /// answers "I am Arm" (so DREAM's board on the same PC isn't picked by
+    /// mistake). If none answers, falls back to a best-effort guess:
+    /// System.IO.Ports can't read USB descriptions (unlike pyserial), so on
+    /// Linux this prefers ttyACM*/ttyUSB*, and on Windows only auto-picks when
+    /// there's exactly one COM port.
     /// </summary>
     public static string? AutoDetect()
     {
         var ports = ListPorts();
+        var answers = ports.Select(p => Task.Run(() => AnswersIAmArm(p) ? p : null)).ToArray();
+        var arm = answers.Select(t => t.Result).FirstOrDefault(p => p != null);
+        if (arm != null) return arm;
         if (OperatingSystem.IsLinux())
             return ports.FirstOrDefault(p => p.Contains("ttyACM")) ?? ports.FirstOrDefault(p => p.Contains("ttyUSB"));
         return ports.Length == 1 ? ports[0] : null;

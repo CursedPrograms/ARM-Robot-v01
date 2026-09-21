@@ -76,6 +76,15 @@ func StartFleetServer(motors map[int]Motor, shared *Shared, serialConnected *ato
 	mux.HandleFunc("/{$}", serveWebFile("index.html", "text/html; charset=utf-8"))
 	mux.HandleFunc("/style.css", serveWebFile("style.css", "text/css; charset=utf-8"))
 	mux.HandleFunc("/app.js", serveWebFile("app.js", "application/javascript; charset=utf-8"))
+	mux.HandleFunc("/colour_scheme.xml", func(w http.ResponseWriter, r *http.Request) {
+		data, err := os.ReadFile(filepath.Join(repoRoot(), "colour_scheme.xml"))
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+		_, _ = w.Write(data)
+	})
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		fmt.Fprintf(w, "%s alive", fleetName)

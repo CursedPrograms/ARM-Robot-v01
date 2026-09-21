@@ -60,18 +60,55 @@ const MACRO_LIST_MAX = 6
 const MARGIN_TOP = 250
 const ROW_HEIGHT = 60
 
-const BG_COLOR = (30, 30, 30)
-const TEXT_COLOR = (230, 230, 230)
-const DISABLED_TEXT_COLOR = (120, 120, 120)
-const STATUS_COLOR = (150, 150, 150)
-const WARN_COLOR = (240, 140, 60)
-const BUTTON_COLOR = (70, 70, 70)
-const BUTTON_HOVER_COLOR = (100, 100, 100)
-const BUTTON_ACTIVE_COLOR = (60, 120, 90)
-const BUTTON_RECORD_COLOR = (150, 50, 50)
-const MACRO_SELECTED_COLOR = (80, 130, 180)
-const TRACK_COLOR = (90, 90, 90)
-const KNOB_COLOR = (80, 180, 255)
+# Colours come from colour_scheme.xml at the repo root; these are the fallbacks
+# for any role missing from it (or if the file can't be read).
+const SCHEME_PATH = joinpath(@__DIR__, "..", "..", "colour_scheme.xml")
+
+function load_scheme()
+    scheme = Dict{String,NTuple{3,Int}}(
+        "background" => (0x33, 0x29, 0x2F),
+        "panel" => (0x33, 0x1F, 0x2B),
+        "border" => (0x36, 0x15, 0x29),
+        "text" => (0xFF, 0xFF, 0xFF),
+        "text_dim" => (0xC9, 0xB6, 0xC1),
+        "button" => (0x36, 0x15, 0x29),
+        "button_hover" => (0x69, 0x15, 0x48),
+        "button_active" => (0x9C, 0x00, 0x60),
+        "button_disabled" => (0x33, 0x1F, 0x2B),
+        "accent" => (0x9C, 0x00, 0x60),
+        "accent_hover" => (0xC2, 0x1F, 0x82),
+        "track" => (0x69, 0x15, 0x48),
+        "selected" => (0x69, 0x15, 0x48),
+        "danger" => (0x96, 0x32, 0x32),
+        "danger_hover" => (0xAD, 0x3A, 0x3A),
+        "warn" => (0xF0, 0x8C, 0x3C)
+    )
+    isfile(SCHEME_PATH) || return scheme
+    try
+        for m in eachmatch(r"<colour\s+name=\"([^\"]+)\"\s+value=\"#([0-9A-Fa-f]{6})\"", read(SCHEME_PATH, String))
+            n = parse(Int, m.captures[2]; base=16)
+            scheme[m.captures[1]] = (n >> 16, (n >> 8) & 0xFF, n & 0xFF)
+        end
+    catch e
+        @warn "could not read colour_scheme.xml, using default colours" exception=e
+    end
+    return scheme
+end
+
+const SCHEME = load_scheme()
+
+const BG_COLOR = SCHEME["background"]
+const TEXT_COLOR = SCHEME["text"]
+const DISABLED_TEXT_COLOR = SCHEME["text_dim"]
+const STATUS_COLOR = SCHEME["text_dim"]
+const WARN_COLOR = SCHEME["warn"]
+const BUTTON_COLOR = SCHEME["button"]
+const BUTTON_HOVER_COLOR = SCHEME["button_hover"]
+const BUTTON_ACTIVE_COLOR = SCHEME["button_active"]
+const BUTTON_RECORD_COLOR = SCHEME["danger"]
+const MACRO_SELECTED_COLOR = SCHEME["selected"]
+const TRACK_COLOR = SCHEME["track"]
+const KNOB_COLOR = SCHEME["accent"]
 
 # =========================================================================
 # Small helpers
@@ -113,12 +150,36 @@ function print_serial_ports()
     end
 end
 
-function autodetect_port()
-    for (name, desc) in list_serial_ports_info()
-        dl = lowercase(desc)
-        any(h -> occursin(h, dl), ARDUINO_HINTS) && return name
+# True if the board on `name` answers "WHO" with "I am Arm" (arm.ino), so
+# DREAM's board on the same PC isn't picked by mistake.
+function answers_i_am_arm(name)
+    try
+        LibSerialPort.open(name, 115200) do sp
+            sleep(2.0)  # board resets when the port opens
+            LibSerialPort.sp_flush(sp, LibSerialPort.SP_BUF_INPUT)
+            write(sp, "WHO\n")
+            deadline = time() + 1.5
+            seen = ""
+            while time() < deadline
+                seen *= String(LibSerialPort.nonblocking_read(sp))
+                occursin("i am arm", lowercase(seen)) && return true
+                sleep(0.02)
+            end
+            return false
+        end
+    catch
+        return false  # busy or unusable
     end
-    return nothing
+end
+
+# Prefers the port that answers "I am Arm"; otherwise the first likely Arduino adapter.
+function autodetect_port()
+    candidates = [name for (name, desc) in list_serial_ports_info()
+                  if any(h -> occursin(h, lowercase(desc)), ARDUINO_HINTS)]
+    for name in candidates
+        answers_i_am_arm(name) && return name
+    end
+    return isempty(candidates) ? nothing : first(candidates)
 end
 
 function list_joysticks()
@@ -143,7 +204,7 @@ end
 function find_system_font()
     candidates = String[]
     if Sys.iswindows()
-        fonts = joinpath(get(ENV, "WINDIR", "C:\Windows"), "Fonts")
+        fonts = joinpath(get(ENV, "WINDIR", "C:\\Windows"), "Fonts")
         append!(candidates, joinpath.(fonts, ("segoeui.ttf", "arial.ttf", "calibri.ttf", "tahoma.ttf")))
     elseif Sys.isapple()
         append!(candidates, ["/System/Library/Fonts/Supplemental/Arial.ttf", "/Library/Fonts/Arial.ttf", "/System/Library/Fonts/Helvetica.ttc"])

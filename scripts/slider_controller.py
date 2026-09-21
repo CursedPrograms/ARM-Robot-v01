@@ -39,6 +39,7 @@ except ImportError:
     sys.exit(1)
 
 from motor_config import load_motor_config
+from colour_scheme import rgb
 
 # Descriptions that identify likely Arduino USB-serial adapters, for --port auto-detect
 ARDUINO_HINTS = ("arduino", "ch340", "usb-serial", "usb serial", "cp210", "ftdi")
@@ -50,13 +51,14 @@ SLIDER_X = 150
 SLIDER_WIDTH = 260
 KNOB_RADIUS = 10
 
-BG_COLOR = (30, 30, 30)
-TRACK_COLOR = (90, 90, 90)
-KNOB_COLOR = (80, 180, 255)
-TEXT_COLOR = (230, 230, 230)
-STATUS_COLOR = (150, 150, 150)
-BUTTON_COLOR = (70, 70, 70)
-BUTTON_HOVER_COLOR = (100, 100, 100)
+# Colours come from colour_scheme.xml at the repo root.
+BG_COLOR = rgb("background")
+TRACK_COLOR = rgb("track")
+KNOB_COLOR = rgb("accent")
+TEXT_COLOR = rgb("text")
+STATUS_COLOR = rgb("text_dim")
+BUTTON_COLOR = rgb("button")
+BUTTON_HOVER_COLOR = rgb("button_hover")
 
 RESET_BUTTON_RECT = pygame.Rect((WINDOW_WIDTH - 160) // 2, WINDOW_HEIGHT - 50, 160, 36)
 

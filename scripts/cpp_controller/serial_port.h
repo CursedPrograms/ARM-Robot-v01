@@ -14,9 +14,11 @@ struct PortInfo {
 
 std::vector<PortInfo> listSerialPorts();
 
-// Returns the first port whose description matches a likely Arduino
-// USB-serial adapter (same ARDUINO_HINTS substrings as the Python scripts),
-// or an empty string if none look like one.
+// Finds the arm's port: asks each likely Arduino port "WHO" and takes the one
+// that answers "I am Arm" (so DREAM's board on the same PC isn't picked by
+// mistake). Falls back to the first port whose description matches a likely
+// Arduino USB-serial adapter (same ARDUINO_HINTS substrings as the Python
+// scripts), or an empty string if none look like one.
 std::string autodetectPort();
 
 class SerialPort {
@@ -28,6 +30,11 @@ public:
     std::string open(const std::string& device, int baud);
 
     void close();
+
+    // Returns whatever bytes have arrived so far (non-blocking, may be empty).
+    std::string readAvailable();
+    // Discards anything received but not yet read.
+    void flushInput();
     bool isOpen() const { return handle_ != nullptr; }
 
     // Writes `line` followed by '\n'. No-op if not open.

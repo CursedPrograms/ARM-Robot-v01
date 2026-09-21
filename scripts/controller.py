@@ -66,6 +66,8 @@ except ImportError:
     sys.exit(1)
 
 from motor_config import load_motor_config, load_geometry
+from colour_scheme import rgb
+from board_id import find_board
 from IK_controller import inverse_kinematics
 from slider_controller import Slider
 
@@ -106,15 +108,17 @@ ROW_HEIGHT = 60
 # Note: Slider (imported from slider_controller) draws using slider_controller's
 # own SLIDER_X/SLIDER_WIDTH/KNOB_RADIUS module constants, not ones defined here.
 
-BG_COLOR = (30, 30, 30)
-TEXT_COLOR = (230, 230, 230)
-STATUS_COLOR = (150, 150, 150)
-WARN_COLOR = (240, 140, 60)
-BUTTON_COLOR = (70, 70, 70)
-BUTTON_HOVER_COLOR = (100, 100, 100)
-BUTTON_ACTIVE_COLOR = (60, 120, 90)
-BUTTON_RECORD_COLOR = (150, 50, 50)
-MACRO_SELECTED_COLOR = (80, 130, 180)
+# Colours come from colour_scheme.xml at the repo root.
+BG_COLOR = rgb("background")
+TEXT_COLOR = rgb("text")
+STATUS_COLOR = rgb("text_dim")
+WARN_COLOR = rgb("warn")
+BUTTON_COLOR = rgb("button")
+BUTTON_HOVER_COLOR = rgb("button_hover")
+BUTTON_ACTIVE_COLOR = rgb("button_active")
+BUTTON_DISABLED_COLOR = rgb("button_disabled")
+BUTTON_RECORD_COLOR = rgb("danger")
+MACRO_SELECTED_COLOR = rgb("selected")
 
 
 def axis_to_angle(value, lo, hi, deadzone=DEADZONE):
@@ -152,6 +156,9 @@ def list_serial_ports():
 
 
 def autodetect_port():
+    port = find_board("arm", 115200)  # board answers "WHO" with "I am Arm"
+    if port:
+        return port
     for p in list_ports.comports():
         if any(hint in p.description.lower() for hint in ARDUINO_HINTS):
             return p.device
@@ -293,6 +300,11 @@ def create_fleet_app(motors, fleet_state, fleet_lock, connected):
     @app.route("/")
     def index():
         return send_from_directory(WEB_DIR, "index.html")
+
+    @app.route("/colour_scheme.xml")
+    def colour_scheme_xml():
+        # The page's app.js applies this over style.css's built-in colours.
+        return send_from_directory(WEB_DIR.parent.parent, "colour_scheme.xml", mimetype="application/xml")
 
     @app.route("/ping")
     def ping():
@@ -733,7 +745,7 @@ def main():
 
             for name, btn in mode_buttons.items():
                 enabled = name != "joystick" or js is not None
-                btn.draw(screen, font, active=(mode == name), color=(None if enabled else (50, 50, 50)))
+                btn.draw(screen, font, active=(mode == name), color=(None if enabled else BUTTON_DISABLED_COLOR))
 
             record_button.label = f"Recording... {time.time() - record_start:.1f}s" if recording else "Record"
             record_button.draw(screen, font, color=(BUTTON_RECORD_COLOR if recording else None))

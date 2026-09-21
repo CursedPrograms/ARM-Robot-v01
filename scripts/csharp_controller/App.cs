@@ -14,6 +14,7 @@ public sealed class App : Application
     {
         Styles.Add(new FluentTheme());
         RequestedThemeVariant = ThemeVariant.Dark;
+        ColourScheme.Apply(this);
     }
 
     public override void OnFrameworkInitializationCompleted()

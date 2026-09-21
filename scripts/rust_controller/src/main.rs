@@ -18,6 +18,7 @@ mod kinematics;
 mod macros;
 mod options;
 mod remote;
+mod scheme;
 mod serial_link;
 mod shared;
 
@@ -61,5 +62,8 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default().with_inner_size([620.0, 640.0]).with_title("Arm Controller (Rust)"),
         ..Default::default()
     };
-    eframe::run_native("Arm Controller (Rust)", native_options, Box::new(move |_cc| Ok(Box::new(app))))
+    eframe::run_native("Arm Controller (Rust)", native_options, Box::new(move |cc| {
+        scheme::apply(&cc.egui_ctx);
+        Ok(Box::new(app))
+    }))
 }

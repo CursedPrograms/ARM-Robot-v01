@@ -1,6 +1,25 @@
 // ARM Fleet Control - talks to controller.py's Fleet mode HTTP API
 // (/status, /cmd?motor=&angle=, /reset), served from the same Flask app.
 
+// Colours: the controller serves colour_scheme.xml; apply it over style.css's defaults.
+const SCHEME_TO_CSS_VAR = {
+  background: "--bg", panel: "--panel", border: "--border",
+  text: "--text", text_dim: "--text-dim",
+  accent: "--accent", accent_hover: "--accent-hover",
+  danger: "--danger", danger_hover: "--danger-hover",
+};
+
+fetch("colour_scheme.xml")
+  .then((r) => (r.ok ? r.text() : Promise.reject(new Error(r.status))))
+  .then((text) => {
+    const doc = new DOMParser().parseFromString(text, "application/xml");
+    doc.querySelectorAll("colour").forEach((el) => {
+      const cssVar = SCHEME_TO_CSS_VAR[el.getAttribute("name")];
+      if (cssVar) document.documentElement.style.setProperty(cssVar, el.getAttribute("value"));
+    });
+  })
+  .catch(() => {}); // no scheme available: keep style.css's defaults
+
 const MOTOR_NAMES = {
   1: "Base",
   2: "Shoulder",

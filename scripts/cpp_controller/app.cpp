@@ -33,6 +33,7 @@
 #include "joystick.h"
 #include "kinematics.h"
 #include "macros.h"
+#include "colour_scheme.h"
 #include "motor_config.h"
 #include "remote_arm.h"
 #include "serial_port.h"
@@ -246,7 +247,7 @@ HWND makeStatic(HWND parent, int x, int y, int w, int h, const char* text = "") 
 }
 
 HWND makeButton(HWND parent, int id, int x, int y, int w, int h, const char* text) {
-    return CreateWindowExA(0, "BUTTON", text, WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+    return CreateWindowExA(0, "BUTTON", text, WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                             x, y, w, h, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
                             GetModuleHandle(nullptr), nullptr);
 }
@@ -591,8 +592,58 @@ void onCommand(App& app, WPARAM wParam) {
     }
 }
 
+// Brushes for the colour scheme (colour_scheme.xml); created once, live for the process.
+HBRUSH backgroundBrush() {
+    static HBRUSH b = CreateSolidBrush(schemeColour("background"));
+    return b;
+}
+
+HBRUSH panelBrush() {
+    static HBRUSH b = CreateSolidBrush(schemeColour("panel"));
+    return b;
+}
+
+// Buttons are owner-drawn so they can take the scheme's colours. Native
+// buttons don't report hover, so button_hover isn't used here.
+void drawButton(const DRAWITEMSTRUCT& d) {
+    char label[128] = {0};
+    GetWindowTextA(d.hwndItem, label, sizeof(label) - 1);
+
+    bool disabled = (d.itemState & ODS_DISABLED) != 0;
+    bool active = label[0] == '[' || std::string(label) == "Stop"; // selected mode / recording / playing
+    const char* role = disabled ? "button_disabled"
+                       : (d.itemState & ODS_SELECTED) || active ? "button_active"
+                       : "button";
+
+    HBRUSH fill = CreateSolidBrush(schemeColour(role));
+    FillRect(d.hDC, &d.rcItem, fill);
+    DeleteObject(fill);
+
+    SetBkMode(d.hDC, TRANSPARENT);
+    SetTextColor(d.hDC, schemeColour(disabled ? "text_dim" : "text"));
+    RECT r = d.rcItem;
+    DrawTextA(d.hDC, label, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
+        case WM_CTLCOLORSTATIC: { // labels, and the sliders' backgrounds
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            HWND ctl = reinterpret_cast<HWND>(lParam);
+            const char* role = ctl == g_app.staticWarn ? "warn" : ctl == g_app.staticStatus ? "text_dim" : "text";
+            SetTextColor(dc, schemeColour(role));
+            SetBkColor(dc, schemeColour("background"));
+            return reinterpret_cast<LRESULT>(backgroundBrush());
+        }
+        case WM_CTLCOLORLISTBOX: {
+            HDC dc = reinterpret_cast<HDC>(wParam);
+            SetTextColor(dc, schemeColour("text"));
+            SetBkColor(dc, schemeColour("panel"));
+            return reinterpret_cast<LRESULT>(panelBrush());
+        }
+        case WM_DRAWITEM:
+            drawButton(*reinterpret_cast<const DRAWITEMSTRUCT*>(lParam));
+            return TRUE;
         case WM_COMMAND:
             onCommand(g_app, wParam);
             return 0;
@@ -759,7 +810,7 @@ int main(int argc, char** argv) {
     wc.hInstance = GetModuleHandle(nullptr);
     wc.lpszClassName = "ArmControllerWindowCpp";
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_BTNFACE + 1);
+    wc.hbrBackground = backgroundBrush();
     RegisterClassA(&wc);
 
     RECT rect = {0, 0, WINDOW_WIDTH, WINDOW_HEIGHT};

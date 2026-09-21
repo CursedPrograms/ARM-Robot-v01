@@ -10,6 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_executable(controller
     app.cpp
+    colour_scheme.cpp
     motor_config.cpp
     kinematics.cpp
     serial_port.cpp

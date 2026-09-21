@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Colour scheme for every ARM controller UI (Python, web, C++, C#, Go, Rust, Julia).
+  Edit a value and restart the controller - no rebuild needed. A missing or
+  unreadable file/role falls back to the built-in default for that colour.
+
+  Format: one colour per line, written exactly as  name="..." value="#RRGGBB".
+  (Keep name before value; the C++, Rust and Julia loaders read it line by line.)
+
+  Base palette:  prime #9C0060  |  #691548  |  #361529  |  #331F2B  |  dark #33292F
+  Text is white.
+-->
+<colour_scheme>
+  <!-- Surfaces -->
+  <colour name="background"      value="#33292F"/>  <!-- window / page background (dark) -->
+  <colour name="panel"           value="#331F2B"/>  <!-- cards, rows, list boxes -->
+  <colour name="border"          value="#361529"/>
+
+  <!-- Text -->
+  <colour name="text"            value="#FFFFFF"/>
+  <colour name="text_dim"        value="#C9B6C1"/>  <!-- status lines, sub-labels -->
+
+  <!-- Buttons -->
+  <colour name="button"          value="#361529"/>
+  <colour name="button_hover"    value="#691548"/>
+  <colour name="button_active"   value="#9C0060"/>  <!-- selected mode, pressed -->
+  <colour name="button_disabled" value="#331F2B"/>
+
+  <!-- Accents -->
+  <colour name="accent"          value="#9C0060"/>  <!-- prime colour: slider knob, highlights -->
+  <colour name="accent_hover"    value="#C21F82"/>  <!-- lighter prime: values, connected dot -->
+  <colour name="track"           value="#691548"/>  <!-- slider track -->
+  <colour name="selected"        value="#691548"/>  <!-- selected macro row -->
+
+  <!-- Alerts -->
+  <colour name="danger"          value="#963232"/>  <!-- record / reset -->
+  <colour name="danger_hover"    value="#AD3A3A"/>
+  <colour name="warn"            value="#F08C3C"/>
+</colour_scheme>
