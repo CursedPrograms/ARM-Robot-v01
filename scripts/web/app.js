@@ -10,7 +10,7 @@ const MOTOR_NAMES = {
   6: "Claw",
 };
 
-const STATUS_POLL_MS = 1000;
+const STATUS_POLL_MS = 250;
 const SEND_DEBOUNCE_MS = 30;
 
 const motorList = document.getElementById("motorList");

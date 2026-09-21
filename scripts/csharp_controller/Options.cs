@@ -21,6 +21,8 @@ public sealed class Options
     public string RiftHost { get; set; } = "127.0.0.1";
     public int RiftPort { get; set; } = 5000;
     public bool NoRegister { get; set; }
+    public bool Serve { get; set; }
+    public string? Connect { get; set; }
 
     public static bool TryParse(string[] args, out Options options, out string error)
     {
@@ -37,7 +39,7 @@ public sealed class Options
             string a = args[i];
 
             string? value = null;
-            if (a is "--port" or "--rift-host" or "--device" or "--baud" or "--fleet-port" or "--rift-port" or "--rate" or "--mode")
+            if (a is "--port" or "--connect" or "--rift-host" or "--device" or "--baud" or "--fleet-port" or "--rift-port" or "--rate" or "--mode")
             {
                 if (i + 1 >= args.Length) return $"{a} requires a value";
                 value = args[++i];
@@ -48,6 +50,8 @@ public sealed class Options
                 case "--list": o.ListJoysticks = true; break;
                 case "--list-ports": o.ListPorts = true; break;
                 case "--no-register": o.NoRegister = true; break;
+                case "--serve": o.Serve = true; break;
+                case "--connect": o.Connect = value; break;
                 case "--port": o.Port = value; break;
                 case "--rift-host": o.RiftHost = value!; break;
                 case "--device":
@@ -85,6 +89,8 @@ public sealed class Options
                     return $"Unknown argument: {a}";
             }
         }
+        if (o.Connect != null && (o.Serve || o.Mode == ControlMode.Fleet))
+            return "--connect can't be combined with --serve or --mode fleet (this controller has no arm of its own)";
         return null;
     }
 }

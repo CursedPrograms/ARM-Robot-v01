@@ -16,6 +16,7 @@ add_executable(controller
     joystick.cpp
     macros.cpp
     fleet_server.cpp
+    remote_arm.cpp
 )
 
 target_link_libraries(controller PRIVATE ws2_32 setupapi winmm comctl32)

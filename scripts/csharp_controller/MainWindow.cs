@@ -88,6 +88,10 @@ public sealed class MainWindow : Window
     ControlMode _playPrevMode;
 
     Dictionary<int, int> _lastSent = new(); // channel -> angle
+    Dictionary<int, int> _prevLocal = new(); // last angle each local input produced, by motor number (see MergeLocal)
+    ControlMode _lastMode;
+    readonly RemoteArm? _remote;
+    bool _adopted; // a client waits for the hub's real angles before its own inputs may write
 
     // ---- fleet ----
     readonly FleetServer _fleet = new();
@@ -116,11 +120,15 @@ public sealed class MainWindow : Window
         if (_joystick != null) Console.WriteLine($"Using joystick: {_joystick.Name}");
         else Console.WriteLine($"No joystick found - Joystick mode will be unavailable. ({joystickProblem})");
 
-        string? port = opts.Port ?? SerialLink.AutoDetect();
+        string? port = opts.Connect != null ? null : opts.Port ?? SerialLink.AutoDetect();
         if (port != null)
         {
             string? err = _serial.Open(port, opts.Baud);
             _statusText = err == null ? $"Connected to {port} @ {opts.Baud} baud." : $"Could not open {port}: {err}";
+        }
+        else if (opts.Connect != null)
+        {
+            _statusText = $"Remote arm at {opts.Connect} (no local serial port).";
         }
         else
         {
@@ -130,12 +138,15 @@ public sealed class MainWindow : Window
 
         _mode = opts.Mode ?? (_joystick != null ? ControlMode.Joystick : ControlMode.Slider);
         _playPrevMode = _mode;
+        _lastMode = _mode;
+        _remote = opts.Connect != null ? new RemoteArm(opts.Connect, _fleetState) : null;
+        _adopted = _remote == null;
 
         BuildControls();
         Content = _canvas;
         RefreshMacroList();
         ApplyModeVisibility();
-        if (_mode == ControlMode.Fleet) EnsureFleetStarted();
+        if (_mode == ControlMode.Fleet || opts.Serve) EnsureFleetStarted();
 
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(opts.Rate > 0 ? 1000.0 / opts.Rate : 33) };
         _timer.Tick += (_, _) => Tick();
@@ -255,11 +266,21 @@ public sealed class MainWindow : Window
 
     void EnsureFleetStarted()
     {
-        if (_fleetStarted || _fleetError != "") return;
+        if (_fleetStarted || _fleetError != "" || _opts.Connect != null) return; // a client has no arm of its own to serve
         string err = _fleet.Start(_motors, _fleetState, () => _serial.IsOpen,
                                   _opts.FleetPort, !_opts.NoRegister, _opts.RiftHost, _opts.RiftPort);
-        if (err == "") _fleetStarted = true;
-        else _fleetError = err;
+        if (err == "")
+        {
+            _fleetStarted = true;
+            string url = $"http://{_fleetLanIp}:{_opts.FleetPort}";
+            Console.WriteLine($"Web control on {url}");
+            _status.Text = $"{_statusText}  |  Web: {url}";
+        }
+        else
+        {
+            _fleetError = err;
+            Console.WriteLine(err);
+        }
     }
 
     void RefreshMacroList()
@@ -357,6 +378,7 @@ public sealed class MainWindow : Window
     {
         _timer.Stop();
         _fleet.Dispose();
+        _remote?.Dispose();
         _joystick?.Dispose();
         _serial.Dispose();
         base.OnClosed(e);
@@ -425,6 +447,78 @@ public sealed class MainWindow : Window
         }
     }
 
+    // =====================================================================
+    // Shared arm state. _fleetState.Angles is the single set of angles every
+    // input writes to and every output (serial, web page, RIFT, the sliders)
+    // reads from. An input whose value changed since last frame writes it (last
+    // writer wins); inputs that didn't change leave what another input wrote
+    // alone and instead follow it.
+    // =====================================================================
+
+    Dictionary<int, int> ToMotorKeyed(Dictionary<int, int> byChannel)
+    {
+        var result = new Dictionary<int, int>();
+        foreach (var (n, m) in _motors)
+            if (byChannel.TryGetValue(m.Channel, out int angle)) result[n] = angle;
+        return result;
+    }
+
+    Dictionary<int, int> MergeLocal(Dictionary<int, int> localByMotor)
+    {
+        var changed = new Dictionary<int, int>();
+        lock (_fleetState.Lock)
+        {
+            foreach (var (n, angle) in localByMotor)
+                if (!_prevLocal.TryGetValue(n, out int prev) || prev != angle)
+                {
+                    _fleetState.Angles[n] = angle;
+                    changed[n] = angle;
+                }
+        }
+        _prevLocal = new Dictionary<int, int>(localByMotor);
+        return changed;
+    }
+
+    Dictionary<int, int> SharedAsChannelMap()
+    {
+        var result = new Dictionary<int, int>();
+        lock (_fleetState.Lock)
+        {
+            foreach (var (n, m) in _motors) result[m.Channel] = _fleetState.Angles[n];
+        }
+        return result;
+    }
+
+    void PublishByChannel(Dictionary<int, int> byChannel)
+    {
+        var changed = new Dictionary<int, int>();
+        lock (_fleetState.Lock)
+        {
+            foreach (var (n, m) in _motors)
+                if (byChannel.TryGetValue(m.Channel, out int angle))
+                {
+                    _fleetState.Angles[n] = angle;
+                    changed[n] = angle;
+                }
+        }
+        _remote?.Queue(changed);
+    }
+
+    // Slider positions adopt the shared angles (so web-page/other-input changes show up).
+    void FollowSliders()
+    {
+        lock (_fleetState.Lock)
+        {
+            foreach (var row in _sliderRows)
+            {
+                int shared = _fleetState.Angles[row.Motor];
+                if (row.Position != shared) row.Track.Value = shared;
+                _prevLocal[row.Motor] = shared;
+                row.Value.Text = $"{shared}\u00B0";
+            }
+        }
+    }
+
     void TickCore()
     {
         if (_playing)
@@ -433,31 +527,35 @@ public sealed class MainWindow : Window
             while (_playIndex < _playSteps.Count && _playSteps[_playIndex].T <= elapsed)
             {
                 Send(_playSteps[_playIndex].Commands);
+                PublishByChannel(_playSteps[_playIndex].Commands);
                 _playIndex++;
             }
+            if (_mode == ControlMode.Slider) FollowSliders();
             _btnPlay.Content = $"Stop {_playIndex}/{_playSteps.Count}";
             if (_playIndex >= _playSteps.Count) StopPlayback();
             return;
         }
 
-        Dictionary<int, int>? commands = null;
+        if (_mode != _lastMode)
+        {
+            _prevLocal.Clear();
+            if (_mode == ControlMode.Slider) FollowSliders();
+            _lastMode = _mode;
+        }
+
+        Dictionary<int, int>? local = null; // channel -> angle from this mode's own input, if any
         string warn = "";
 
         switch (_mode)
         {
             case ControlMode.Joystick:
-                if (_joystick != null) commands = JoystickCommands();
+                if (_joystick != null) local = JoystickCommands();
                 else warn = "No joystick connected.";
                 break;
 
             case ControlMode.Slider:
-                commands = new Dictionary<int, int>();
-                foreach (var row in _sliderRows)
-                {
-                    int pos = row.Position;
-                    commands[_motors[row.Motor].Channel] = pos;
-                    row.Value.Text = $"{pos}°";
-                }
+                local = new Dictionary<int, int>();
+                foreach (var row in _sliderRows) local[_motors[row.Motor].Channel] = row.Position;
                 break;
 
             case ControlMode.Ik:
@@ -471,7 +569,7 @@ public sealed class MainWindow : Window
                 _ikRows["x"].Value.Text = $"{x}mm";
                 _ikRows["y"].Value.Text = $"{y}mm";
                 _ikRows["z"].Value.Text = $"{z}mm";
-                _ikRows["pitch"].Value.Text = $"{pitch}°";
+                _ikRows["pitch"].Value.Text = $"{pitch}\u00B0";
                 _ikRows["roll"].Value.Text = $"{roll}";
 
                 var sol = Kinematics.InverseKinematics(_motors, _geometry, x, y, z, pitch, _elbowDown);
@@ -483,18 +581,22 @@ public sealed class MainWindow : Window
                     cmd[_motors[5].Channel] = roll;
                     cmd[_motors[6].Channel] = _clawClosed ? _motors[6].Max : _motors[6].Min;
                     _lastValidIk = cmd;
-                    commands = cmd;
+                    local = cmd;
                 }
                 else
                 {
                     _ikReachable = false;
-                    commands = _lastValidIk; // hold the last good pose
+                    local = _lastValidIk; // hold the last good pose
                 }
                 if (!_ikReachable) warn = "Target unreachable - holding last valid pose.";
                 break;
 
             case ControlMode.Fleet:
-                if (_fleetError != "")
+                if (_opts.Connect != null)
+                {
+                    warn = "Showing the remote arm's angles.";
+                }
+                else if (_fleetError != "")
                 {
                     warn = _fleetError;
                 }
@@ -503,22 +605,37 @@ public sealed class MainWindow : Window
                     warn = $"Open http://{_fleetLanIp}:{_opts.FleetPort} in a browser to control";
                     if (!_opts.NoRegister) warn += $"  -  heartbeating to RIFT at {_opts.RiftHost}:{_opts.RiftPort}";
                 }
-                commands = new Dictionary<int, int>();
-                lock (_fleetState.Lock)
-                {
-                    foreach (var (n, m) in _motors) commands[m.Channel] = _fleetState.Angles[n];
-                }
                 break;
         }
 
         _warn.Text = warn;
 
-        if (commands != null)
+        // Merge this mode's input into the shared angles, then always send/record the
+        // shared state (so web-page and RIFT changes reach the arm in any mode).
+        if (local != null)
         {
-            Send(commands);
-            if (_recording)
-                _recordSteps.Add(new MacroStep(_recordClock.Elapsed.TotalSeconds, new Dictionary<int, int>(commands)));
+            var localByMotor = ToMotorKeyed(local);
+            if (!_adopted)
+            {
+                if (_remote!.Synced) // connected: take the hub's state as-is, don't move the arm
+                {
+                    _prevLocal = new Dictionary<int, int>(localByMotor);
+                    _adopted = true;
+                }
+            }
+            else
+            {
+                var changed = MergeLocal(localByMotor);
+                if (_remote != null && changed.Count > 0) _remote.Queue(changed);
+            }
+            if (_mode == ControlMode.Slider) FollowSliders();
         }
+        if (_remote != null)
+            _status.Text = $"Remote arm {_opts.Connect}: " + (_remote.Connected ? "connected" : "UNREACHABLE");
+        var commands = SharedAsChannelMap();
+        Send(commands);
+        if (_recording)
+            _recordSteps.Add(new MacroStep(_recordClock.Elapsed.TotalSeconds, new Dictionary<int, int>(commands)));
 
         if (_mode is ControlMode.Joystick or ControlMode.Fleet) UpdateMotorLines();
         if (_recording) _btnRecord.Content = $"Recording... {_recordClock.Elapsed.TotalSeconds:F1}s";

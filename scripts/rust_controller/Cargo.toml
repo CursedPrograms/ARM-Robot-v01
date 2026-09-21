@@ -1,0 +1,21 @@
+[package]
+name = "arm_controller"
+version = "0.1.0"
+edition = "2021"
+description = "Rust/egui counterpart of controller.py: Joystick/Sliders/IK/Fleet modes, macros, live sync, client mode"
+
+[dependencies]
+# Window/UI. Pinned: eframe's app-creation API changes between releases.
+eframe = "0.29"
+serde_json = "1"
+# Serial: no libudev needed to build on Linux (ports are found through sysfs instead).
+serialport = { version = "4", default-features = false }
+# Fleet mode HTTP server / RIFT heartbeat + --connect client (plain http:// only, so no TLS).
+tiny_http = "0.12"
+ureq = { version = "2", default-features = false }
+# Loads SDL2 at runtime for joystick input, so building needs no native SDL2 files.
+libloading = "0.8"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[profile.release]
+opt-level = 2

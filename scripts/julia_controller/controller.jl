@@ -33,6 +33,7 @@ include(joinpath(@__DIR__, "kinematics.jl"))
 include(joinpath(@__DIR__, "slider.jl"))
 include(joinpath(@__DIR__, "macros.jl"))
 include(joinpath(@__DIR__, "fleet_server.jl"))
+include(joinpath(@__DIR__, "remote_arm.jl"))
 
 const WEB_DIR = normpath(joinpath(@__DIR__, "..", "web"))
 
@@ -85,11 +86,17 @@ end
 point_in(px, py, rect) = rect[1] <= px <= rect[1] + rect[3] && rect[2] <= py <= rect[2] + rect[4]
 
 function list_serial_ports_info()
+    # LibSerialPort.list_ports() only prints (it returns nothing), so read libserialport's
+    # port list directly to get (name, description) pairs.
     rows = Tuple{String,String}[]
-    redirect_stdout(devnull) do
-        for row in LibSerialPort.list_ports()
-            push!(rows, (row[1], row[2]))
+    ports = LibSerialPort.sp_list_ports()
+    try
+        for port in unsafe_wrap(Array, ports, 64; own=false)
+            port == C_NULL && break
+            push!(rows, (LibSerialPort.sp_get_port_name(port), LibSerialPort.sp_get_port_description(port)))
         end
+    finally
+        LibSerialPort.sp_free_port_list(ports)
     end
     return rows
 end
@@ -134,8 +141,21 @@ function list_joysticks()
 end
 
 function find_system_font()
-    for name in ("segoeui.ttf", "arial.ttf", "calibri.ttf", "tahoma.ttf")
-        path = joinpath(get(ENV, "WINDIR", "C:\\Windows"), "Fonts", name)
+    candidates = String[]
+    if Sys.iswindows()
+        fonts = joinpath(get(ENV, "WINDIR", "C:\Windows"), "Fonts")
+        append!(candidates, joinpath.(fonts, ("segoeui.ttf", "arial.ttf", "calibri.ttf", "tahoma.ttf")))
+    elseif Sys.isapple()
+        append!(candidates, ["/System/Library/Fonts/Supplemental/Arial.ttf", "/Library/Fonts/Arial.ttf", "/System/Library/Fonts/Helvetica.ttc"])
+    else
+        append!(candidates, [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf", "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/liberation/LiberationSans-Regular.ttf", "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+        ])
+    end
+    for path in candidates
         isfile(path) && return path
     end
     return nothing
@@ -179,6 +199,36 @@ function joystick_commands(js, motors)
         motors[5]["channel"] => axis_to_angle(motor5_val, motors[5]["min"], motors[5]["max"]),
         motors[6]["channel"] => motor6_angle,
     )
+end
+
+# Shared arm state: fleet_state.angles is the single set of angles every input
+# writes to and every output (serial, web page, RIFT, the sliders) reads from.
+# An input whose value changed since last frame writes it (last writer wins);
+# inputs that didn't change leave what another input wrote alone. All dicts are
+# keyed by motor number.
+function merge_local!(local_by_motor, prev_local, fleet_state)
+    changed = Dict{Int,Int}()
+    lock(fleet_state.lock) do
+        for (n, a) in local_by_motor
+            if get(prev_local, n, nothing) != a
+                fleet_state.angles[n] = a
+                changed[n] = a
+            end
+        end
+    end
+    empty!(prev_local)
+    merge!(prev_local, local_by_motor)
+    return changed
+end
+
+# Slider positions adopt the shared angles (so web-page/other-input changes show up).
+function follow_sliders!(sliders, motor_numbers, fleet_state, prev_local)
+    lock(fleet_state.lock) do
+        for (sl, n) in zip(sliders, motor_numbers)
+            sl.angle = fleet_state.angles[n]
+            prev_local[n] = sl.angle
+        end
+    end
 end
 
 function send_commands!(sp, commands, last_sent)
@@ -267,11 +317,11 @@ function parse_args(argv)
         :device => 0, :port => nothing, :baud => 115200, :rate => 30.0,
         :mode => nothing, :list => false, :list_ports => false,
         :fleet_port => DEFAULT_FLEET_PORT, :rift_host => "127.0.0.1",
-        :rift_port => 5000, :no_register => false,
+        :rift_port => 5000, :no_register => false, :serve => false, :connect => nothing,
     )
     i = 1
     n = length(argv)
-    value_flags = ("--device", "--port", "--baud", "--rate", "--mode", "--fleet-port", "--rift-host", "--rift-port")
+    value_flags = ("--device", "--port", "--baud", "--rate", "--mode", "--fleet-port", "--rift-host", "--rift-port", "--connect")
     while i <= n
         a = argv[i]
         needs_value = a in value_flags
@@ -303,11 +353,17 @@ function parse_args(argv)
             opts[:rift_port] = parse(Int, val)
         elseif a == "--no-register"
             opts[:no_register] = true
+        elseif a == "--serve"
+            opts[:serve] = true
+        elseif a == "--connect"
+            opts[:connect] = val
         else
             error("Unknown argument: $a")
         end
         i += needs_value ? 2 : 1
     end
+    opts[:connect] !== nothing && (opts[:serve] || opts[:mode] == "fleet") &&
+        error("--connect can't be combined with --serve or --mode fleet (this controller has no arm of its own)")
     return opts
 end
 
@@ -335,7 +391,7 @@ function main()
     TTF_Init() == 0 || error("TTF_Init failed: $(unsafe_string(SDL_GetError()))")
 
     font_path = find_system_font()
-    font_path === nothing && error("No TrueType font found under %WINDIR%\\Fonts (tried segoeui/arial/calibri/tahoma).")
+    font_path === nothing && error("No TrueType font found (Windows: %WINDIR%\\Fonts; Linux: install DejaVu or Liberation fonts, e.g. `sudo apt install fonts-dejavu-core`).")
     font = TTF_OpenFont(font_path, 16)
     small_font = TTF_OpenFont(font_path, 13)
 
@@ -347,9 +403,10 @@ function main()
     joystick_available = js != C_NULL
     joystick_available || println("No joystick found - Joystick mode will be unavailable.")
 
-    port = args[:port] !== nothing ? args[:port] : autodetect_port()
+    port = args[:connect] !== nothing ? nothing : (args[:port] !== nothing ? args[:port] : autodetect_port())
     sp = nothing
-    status = "No Arduino-like serial port found - display-only mode."
+    status = args[:connect] !== nothing ? "Remote arm at $(args[:connect]) (no local serial port)." :
+             "No Arduino-like serial port found - display-only mode."
     if port !== nothing
         try
             sp = open(port, args[:baud])
@@ -396,7 +453,7 @@ function main()
     fleet_lan_ip = local_lan_ip()
 
     ensure_fleet_started = () -> begin
-        if !fleet_started && isempty(fleet_error)
+        if !fleet_started && isempty(fleet_error) && args[:connect] === nothing  # a client has no arm of its own to serve
             err = start_fleet_server(motors, fleet_state, () -> sp !== nothing;
                                       port=args[:fleet_port], register=!args[:no_register],
                                       rift_host=args[:rift_host], rift_port=args[:rift_port], web_dir=WEB_DIR)
@@ -407,7 +464,23 @@ function main()
             end
         end
     end
-    mode == "fleet" && ensure_fleet_started()
+    if mode == "fleet" || args[:serve]
+        ensure_fleet_started()
+        if !isempty(fleet_error)
+            println(fleet_error)
+        elseif mode != "fleet"
+            status *= "  |  Web: http://$fleet_lan_ip:$(args[:fleet_port])"
+            println("Web control on http://$fleet_lan_ip:$(args[:fleet_port])")
+        end
+    end
+
+    motor_numbers = sort(collect(keys(motors)))
+    channel_to_motor = Dict{Int,Int}(motors[n]["channel"] => n for n in motor_numbers)
+    prev_local = Dict{Int,Int}()
+    last_mode = mode
+
+    remote = args[:connect] !== nothing ? start_remote_arm(args[:connect], fleet_state) : nothing
+    adopted = remote === nothing  # a client waits for the hub's real angles before its own inputs may write
 
     mode_rects = Dict(
         "joystick" => (20, MODE_BUTTON_Y, 122, 34),
@@ -547,20 +620,32 @@ function main()
                 elapsed = time() - play_start
                 while play_index <= length(play_steps) && play_steps[play_index].t <= elapsed
                     last_sent = send_commands!(sp, play_steps[play_index].commands, last_sent)
+                    changed = Dict{Int,Int}(channel_to_motor[ch] => a for (ch, a) in play_steps[play_index].commands if haskey(channel_to_motor, ch))
+                    lock(fleet_state.lock) do
+                        merge!(fleet_state.angles, changed)
+                    end
+                    remote !== nothing && queue_remote!(remote, changed)
                     play_index += 1
                 end
+                mode == "slider" && follow_sliders!(slider_mode_sliders, motor_numbers, fleet_state, prev_local)
                 if play_index > length(play_steps)
                     playing = false
                     mode = play_prev_mode
                 end
             else
-                commands = nothing
+                if mode != last_mode
+                    empty!(prev_local)
+                    mode == "slider" && follow_sliders!(slider_mode_sliders, motor_numbers, fleet_state, prev_local)
+                    last_mode = mode
+                end
+
+                local_commands = nothing  # channel -> angle from this mode's own input, if any
                 if mode == "joystick" && joystick_available
-                    commands = joystick_commands(js, motors)
+                    local_commands = joystick_commands(js, motors)
                 elseif mode == "joystick"
                     warn_text = "No joystick connected."
                 elseif mode == "slider"
-                    commands = Dict{Int,Int}(s.channel => s.angle for s in slider_mode_sliders)
+                    local_commands = Dict{Int,Int}(s.channel => s.angle for s in slider_mode_sliders)
                 elseif mode == "ik"
                     if !geometry_ready(geometry)
                         warn_text = "Geometry not measured - fill in config.json's \"geometry\" section."
@@ -574,10 +659,10 @@ function main()
                             cmd[motors[5]["channel"]] = ik_sliders["roll"].angle
                             cmd[motors[6]["channel"]] = claw_closed ? motors[6]["max"] : motors[6]["min"]
                             last_valid_ik_commands = cmd
-                            commands = cmd
+                            local_commands = cmd
                         else
                             ik_reachable = false
-                            commands = last_valid_ik_commands
+                            local_commands = last_valid_ik_commands  # hold last good pose
                         end
                         warn_text = ik_reachable ? "" : "Target unreachable - holding last valid pose."
                     end
@@ -586,17 +671,36 @@ function main()
                         "Open http://$fleet_lan_ip:$(args[:fleet_port]) in a browser to control" *
                         (args[:no_register] ? "" : "  -  heartbeating to RIFT at $(args[:rift_host]):$(args[:rift_port])") :
                         fleet_error
-                    commands = lock(fleet_state.lock) do
-                        Dict{Int,Int}(motors[n]["channel"] => fleet_state.angles[n] for n in keys(motors))
-                    end
                 end
 
-                if commands !== nothing
-                    last_sent = send_commands!(sp, commands, last_sent)
-                    if recording
-                        push!(record_steps, MacroStep(time() - record_start, commands))
+                # Merge this mode's input into the shared angles, then always send/record the
+                # shared state (so web-page and RIFT changes reach the arm in any mode).
+                if local_commands !== nothing
+                    local_by_motor = Dict{Int,Int}(channel_to_motor[ch] => a for (ch, a) in local_commands if haskey(channel_to_motor, ch))
+                    if !adopted
+                        if remote.synced  # connected: take the hub's state as-is, don't move the arm
+                            empty!(prev_local)
+                            merge!(prev_local, local_by_motor)
+                            adopted = true
+                        end
+                    else
+                        changed_now = merge_local!(local_by_motor, prev_local, fleet_state)
+                        remote !== nothing && !isempty(changed_now) && queue_remote!(remote, changed_now)
                     end
+                    mode == "slider" && follow_sliders!(slider_mode_sliders, motor_numbers, fleet_state, prev_local)
                 end
+                commands = lock(fleet_state.lock) do
+                    Dict{Int,Int}(motors[n]["channel"] => fleet_state.angles[n] for n in motor_numbers)
+                end
+
+                last_sent = send_commands!(sp, commands, last_sent)
+                if recording
+                    push!(record_steps, MacroStep(time() - record_start, commands))
+                end
+            end
+
+            if remote !== nothing
+                status = "Remote arm $(args[:connect]): " * (remote.connected ? "connected" : "UNREACHABLE")
             end
 
             # ---- draw ----
@@ -670,9 +774,10 @@ function main()
             end
 
             SDL_RenderPresent(renderer)
-            SDL_Delay(args[:rate] > 0 ? round(UInt32, 1000.0 / args[:rate]) : UInt32(33))
+            sleep(args[:rate] > 0 ? 1.0 / args[:rate] : 0.033)  # sleep (not SDL_Delay) so HTTP.jl's tasks get to run
         end
     finally
+        remote !== nothing && stop_remote_arm!(remote)
         sp !== nothing && close(sp)
         js != C_NULL && SDL_JoystickClose(js)
         font != C_NULL && TTF_CloseFont(font)

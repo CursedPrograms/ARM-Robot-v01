@@ -34,6 +34,7 @@
 #include "kinematics.h"
 #include "macros.h"
 #include "motor_config.h"
+#include "remote_arm.h"
 #include "serial_port.h"
 
 #pragma comment(lib, "ws2_32.lib")
@@ -83,6 +84,8 @@ struct Args {
     int riftPort = 5000;
     bool noRegister = false;
     bool listPorts = false;
+    bool serve = false;
+    std::string connect; // --connect URL: client mode, no serial port
 };
 
 struct SliderRow {
@@ -141,6 +144,14 @@ struct App {
     Mode playPrevMode = Mode::Slider;
 
     std::map<int, int> lastSent; // channel -> angle
+
+    // Last angle each local input produced, keyed by motor number - see mergeLocal().
+    std::map<int, int> prevLocal;
+
+    // Client mode (--connect): mirror another controller's arm instead of owning serial.
+    RemoteArm remote;
+    bool remoteActive = false;
+    bool adopted = true; // a client waits for the hub's real angles before its own inputs may write
 
     // ---- fleet ----
     FleetServer fleetServer;
@@ -287,7 +298,76 @@ void applyModeVisibility(App& app) {
     }
 }
 
+// ---------------------------------------------------------------------
+// Shared arm state. fleetState.angles is the single set of angles every
+// input writes to and every output (serial, web page, RIFT, this window's
+// sliders) reads from. The rule: an input whose value changed since last
+// frame writes it (last writer wins); inputs that didn't change leave what
+// another input wrote alone and instead follow it.
+// ---------------------------------------------------------------------
+
+std::map<int, int> toMotorKeyed(const App& app, const std::map<int, int>& byChannel) {
+    std::map<int, int> out;
+    for (const auto& kv : app.motors) {
+        auto it = byChannel.find(kv.second.channel);
+        if (it != byChannel.end()) out[kv.first] = it->second;
+    }
+    return out;
+}
+
+std::map<int, int> mergeLocal(App& app, const std::map<int, int>& localByMotor) {
+    std::map<int, int> changed;
+    {
+        std::lock_guard<std::mutex> lock(app.fleetState.mutex);
+        for (const auto& kv : localByMotor) {
+            auto prev = app.prevLocal.find(kv.first);
+            if (prev == app.prevLocal.end() || prev->second != kv.second) {
+                app.fleetState.angles[kv.first] = kv.second;
+                changed[kv.first] = kv.second;
+            }
+        }
+    }
+    app.prevLocal = localByMotor;
+    return changed;
+}
+
+std::map<int, int> sharedAsChannelMap(App& app) {
+    std::map<int, int> out;
+    std::lock_guard<std::mutex> lock(app.fleetState.mutex);
+    for (const auto& kv : app.motors) out[kv.second.channel] = app.fleetState.angles[kv.first];
+    return out;
+}
+
+void publishByChannel(App& app, const std::map<int, int>& byChannel) {
+    std::map<int, int> changed;
+    {
+        std::lock_guard<std::mutex> lock(app.fleetState.mutex);
+        for (const auto& kv : app.motors) {
+            auto it = byChannel.find(kv.second.channel);
+            if (it != byChannel.end()) {
+                app.fleetState.angles[kv.first] = it->second;
+                changed[kv.first] = it->second;
+            }
+        }
+    }
+    if (app.remoteActive) app.remote.queue(changed);
+}
+
+// Slider positions adopt the shared angles.
+void followSliders(App& app) {
+    std::lock_guard<std::mutex> lock(app.fleetState.mutex);
+    for (auto& row : app.sliderRows) {
+        int shared = app.fleetState.angles[row.motor];
+        if (static_cast<int>(SendMessage(row.track, TBM_GETPOS, 0, 0)) != shared) {
+            SendMessage(row.track, TBM_SETPOS, TRUE, shared);
+        }
+        app.prevLocal[row.motor] = shared;
+        SetWindowTextA(row.value, (std::to_string(shared) + "\xB0").c_str());
+    }
+}
+
 void ensureFleetStarted(App& app) {
+    if (app.remoteActive) return; // a client has no arm of its own to serve
     if (app.fleetStarted || !app.fleetError.empty()) return;
     if (app.fleetLanIp.empty()) app.fleetLanIp = getLocalLanIp();
 
@@ -299,8 +379,9 @@ void ensureFleetStarted(App& app) {
         app.fleetError = err;
     } else {
         app.fleetStarted = true;
-        std::lock_guard<std::mutex> lock(app.fleetState.mutex);
-        for (const auto& kv : app.motors) app.fleetState.angles[kv.first] = kv.second.rest;
+        std::string url = "http://" + app.fleetLanIp + ":" + std::to_string(app.args.fleetPort);
+        std::printf("Web control on %s\n", url.c_str());
+        if (app.staticStatus) SetWindowTextA(app.staticStatus, (app.status + "  |  Web: " + url).c_str());
     }
 }
 
@@ -317,6 +398,8 @@ void refreshMacroList(App& app) {
 void setMode(App& app, Mode m) {
     app.mode = m;
     applyModeVisibility(app);
+    app.prevLocal.clear();
+    if (m == Mode::Slider) followSliders(app);
     if (m == Mode::Fleet) ensureFleetStarted(app);
 }
 
@@ -329,8 +412,10 @@ void tick(App& app) {
         double elapsed = std::chrono::duration<double>(Clock::now() - app.playStart).count();
         while (app.playIndex < app.playSteps.size() && app.playSteps[app.playIndex].t <= elapsed) {
             sendCommands(app, app.playSteps[app.playIndex].commands);
+            publishByChannel(app, app.playSteps[app.playIndex].commands);
             app.playIndex++;
         }
+        if (app.mode == Mode::Slider) followSliders(app);
         if (app.playIndex >= app.playSteps.size()) {
             app.playing = false;
             setMode(app, app.playPrevMode);
@@ -340,18 +425,17 @@ void tick(App& app) {
     }
 
     std::optional<std::map<int, int>> commands;
+    std::optional<std::map<int, int>> local; // this mode's own input, keyed by motor number
 
     if (app.mode == Mode::Joystick && app.joystickAvailable) {
         JoystickState state;
-        if (app.joystick.poll(state)) commands = joystickCommands(state, app.motors);
+        if (app.joystick.poll(state)) local = toMotorKeyed(app, joystickCommands(state, app.motors));
     } else if (app.mode == Mode::Slider) {
-        std::map<int, int> cmd;
+        std::map<int, int> byMotor;
         for (auto& row : app.sliderRows) {
-            int pos = static_cast<int>(SendMessage(row.track, TBM_GETPOS, 0, 0));
-            cmd[app.motors.at(row.motor).channel] = pos;
-            SetWindowTextA(row.value, (std::to_string(pos) + "\xB0").c_str());
+            byMotor[row.motor] = static_cast<int>(SendMessage(row.track, TBM_GETPOS, 0, 0));
         }
-        commands = cmd;
+        local = byMotor;
     } else if (app.mode == Mode::Ik) {
         if (!geometryReady(app.geometry)) {
             SetWindowTextA(app.staticWarn, "Geometry not measured - fill in config.json's \"geometry\" section.");
@@ -372,10 +456,10 @@ void tick(App& app) {
                 cmd[app.motors.at(5).channel] = roll;
                 cmd[app.motors.at(6).channel] = app.clawClosed ? app.motors.at(6).max : app.motors.at(6).min;
                 app.lastValidIkCommands = cmd;
-                commands = cmd;
+                local = toMotorKeyed(app, cmd);
             } else {
                 app.ikReachable = false;
-                commands = app.lastValidIkCommands;
+                if (app.lastValidIkCommands) local = toMotorKeyed(app, *app.lastValidIkCommands);
             }
             SetWindowTextA(app.staticWarn, app.ikReachable ? "" : "Target unreachable - holding last valid pose.");
         }
@@ -387,17 +471,31 @@ void tick(App& app) {
             if (!app.args.noRegister) msg += "  -  heartbeating to RIFT at " + app.args.riftHost + ":" + std::to_string(app.args.riftPort);
             SetWindowTextA(app.staticWarn, msg.c_str());
         }
-        std::map<int, int> cmd;
-        {
-            std::lock_guard<std::mutex> lock(app.fleetState.mutex);
-            for (const auto& kv : app.motors) cmd[kv.second.channel] = app.fleetState.angles[kv.first];
-        }
-        commands = cmd;
     }
 
     if (app.mode == Mode::Joystick) {
         SetWindowTextA(app.staticWarn, app.joystickAvailable ? "" : "No joystick connected.");
     }
+
+    // Merge this mode's input into the shared angles, then always send/record
+    // the shared state (so web-page and RIFT changes reach the arm in any mode).
+    if (local) {
+        if (!app.adopted) {
+            if (app.remote.synced()) { // connected: take the hub's state as-is, don't move the arm
+                app.prevLocal = *local;
+                app.adopted = true;
+            }
+        } else {
+            auto changed = mergeLocal(app, *local);
+            if (app.remoteActive && !changed.empty()) app.remote.queue(changed);
+        }
+    }
+    if (app.remoteActive) {
+        std::string st = "Remote arm " + app.args.connect + ": " + (app.remote.connected() ? "connected" : "UNREACHABLE");
+        SetWindowTextA(app.staticStatus, st.c_str());
+    }
+    if (app.mode == Mode::Slider) followSliders(app);
+    commands = sharedAsChannelMap(app);
 
     if (commands) {
         sendCommands(app, *commands);
@@ -575,6 +673,8 @@ bool parseArgs(int argc, char** argv, Args& out) {
         else if (a == "--rift-port") out.riftPort = std::stoi(next("--rift-port"));
         else if (a == "--no-register") out.noRegister = true;
         else if (a == "--list-ports") out.listPorts = true;
+        else if (a == "--serve") out.serve = true;
+        else if (a == "--connect") out.connect = next("--connect");
         else if (a == "--mode") {
             std::string m = next("--mode");
             if (m == "joystick") out.mode = Mode::Joystick;
@@ -596,6 +696,11 @@ int main(int argc, char** argv) {
     App& app = g_app;
     if (!parseArgs(argc, argv, app.args)) return 1;
 
+    if (!app.args.connect.empty() && (app.args.serve || app.args.mode == Mode::Fleet)) {
+        std::fprintf(stderr, "--connect can't be combined with --serve or --mode fleet (this controller has no arm of its own)\n");
+        return 1;
+    }
+
     if (app.args.listPorts) {
         auto ports = listSerialPorts();
         if (ports.empty()) {
@@ -609,6 +714,7 @@ int main(int argc, char** argv) {
 
     app.motors = loadMotorConfig();
     app.geometry = loadGeometry();
+    for (const auto& kv : app.motors) app.fleetState.angles[kv.first] = kv.second.rest;
     double reach = app.geometry.upperArmLength + app.geometry.forearmLength + app.geometry.wristLength;
     app.reach = reach > 0 ? reach : 300;
 
@@ -621,14 +727,26 @@ int main(int argc, char** argv) {
     }
     if (!app.joystickAvailable) std::printf("No joystick found - Joystick mode will be unavailable.\n");
 
-    std::string port = app.args.port.empty() ? autodetectPort() : app.args.port;
-    if (!port.empty()) {
+    std::string port = !app.args.connect.empty() ? "" : (app.args.port.empty() ? autodetectPort() : app.args.port);
+    if (!app.args.connect.empty()) {
+        app.status = "Remote arm at " + app.args.connect + " (no local serial port).";
+    } else if (!port.empty()) {
         std::string err = app.serial.open(port, app.args.baud);
         app.status = err.empty() ? ("Connected to " + port + " @ " + std::to_string(app.args.baud) + " baud.") : err;
     } else {
         app.status = "No Arduino-like serial port found - display-only mode.";
     }
     std::printf("%s\n", app.status.c_str());
+
+    if (!app.args.connect.empty()) {
+        std::string err = app.remote.start(app.args.connect, app.fleetState);
+        if (!err.empty()) {
+            std::fprintf(stderr, "%s\n", err.c_str());
+            return 1;
+        }
+        app.remoteActive = true;
+        app.adopted = false;
+    }
 
     app.mode = app.args.mode.value_or(app.joystickAvailable ? Mode::Joystick : Mode::Slider);
     app.playPrevMode = app.mode;
@@ -657,7 +775,7 @@ int main(int argc, char** argv) {
     }
 
     createControls(app);
-    if (app.mode == Mode::Fleet) ensureFleetStarted(app);
+    if (app.mode == Mode::Fleet || app.args.serve) ensureFleetStarted(app);
 
     ShowWindow(app.hwnd, SW_SHOW);
     UpdateWindow(app.hwnd);
@@ -672,5 +790,6 @@ int main(int argc, char** argv) {
     }
 
     app.fleetServer.stop();
+    app.remote.stop();
     return 0;
 }

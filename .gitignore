@@ -52,4 +52,7 @@ scripts/julia_controller/Manifest.toml
 scripts/csharp_controller/bin/
 scripts/csharp_controller/obj/
 
+# Rust controller build output (see rust_controller.bat / rust_controller.sh)
+scripts/rust_controller/target/
+
 TODO.txt

@@ -15,6 +15,9 @@ Modes (click the buttons, or the Joystick/Sliders/IK mode is picked with
                pose; motors 1-4 are solved with inverse_kinematics() from
                IK_controller.py. Requires config.json's "geometry"
                to be measured first (see IK_controller.py).
+    Remote   - (--connect URL) no serial port here: mirror another controller's arm over
+               HTTP and control it from this window, so several controllers/phones on the
+               network stay in sync.
     Fleet    - starts an HTTP bridge (same wire protocol as RIFT's
                Fleet/register.py) so the [RIFT](https://github.com/CursedPrograms/RIFT)
                dashboard can see and control this arm over the network, the
@@ -364,6 +367,73 @@ def start_fleet_server(args, motors, fleet_state, fleet_lock, connected, fleet_s
             fleet_status["error"] = "requests is not installed (HTTP server running, but no RIFT heartbeat). Install it with: pip install requests"
 
 
+def merge_local(local, prev_local, shared_angles, lock):
+    """Two-way sync rule shared by every input (joystick, sliders, IK, web page):
+    an input whose value changed since last frame writes it into the shared
+    angles (last writer wins); inputs that didn't change leave whatever another
+    input wrote alone. All dicts are keyed by motor number."""
+    changed = {}
+    with lock:
+        for n, angle in local.items():
+            if prev_local.get(n) != angle:
+                shared_angles[n] = angle
+                changed[n] = angle
+    prev_local.clear()
+    prev_local.update(local)
+    return changed
+
+
+class RemoteArm:
+    """Client mode (--connect URL): this controller has no serial port. A
+    background thread mirrors another controller's shared angles (GET /status)
+    into `angles` and pushes local changes back (GET /cmd), so every controller
+    and browser pointed at the same arm stays in sync."""
+
+    def __init__(self, base_url, angles, lock, poll_secs=0.1):
+        import requests
+
+        self.requests = requests
+        self.base = base_url.rstrip("/")
+        self.angles = angles
+        self.lock = lock
+        self.pending = {}
+        self.connected = False
+        self.synced = False  # True once we've seen the hub's real angles at least once
+        self._stop = threading.Event()
+        self._poll = poll_secs
+        threading.Thread(target=self._loop, daemon=True, name="remote-arm").start()
+
+    def queue(self, changed):
+        with self.lock:
+            self.pending.update(changed)
+
+    def close(self):
+        self._stop.set()
+
+    def _loop(self):
+        while not self._stop.is_set():
+            with self.lock:
+                to_send = dict(self.pending)
+                self.pending.clear()
+            try:
+                for n, angle in to_send.items():
+                    self.requests.get(f"{self.base}/cmd", params={"motor": n, "angle": angle}, timeout=1)
+                data = self.requests.get(f"{self.base}/status", timeout=1).json()
+                with self.lock:
+                    for key, m in data["motors"].items():
+                        n = int(key)
+                        if n not in self.pending:  # don't overwrite a change we haven't sent yet
+                            self.angles[n] = m["angle"]
+                self.connected = True
+                self.synced = True
+            except Exception:
+                self.connected = False
+                with self.lock:
+                    for n, angle in to_send.items():
+                        self.pending.setdefault(n, angle)  # retry next round
+            self._stop.wait(self._poll)
+
+
 def send(ser, commands, last_sent):
     """Send commands (channel:angle) over serial if changed from last_sent. Returns the new last_sent."""
     if commands != last_sent:
@@ -386,8 +456,12 @@ def main():
     parser.add_argument("--fleet-port", type=int, default=DEFAULT_FLEET_PORT, help=f"Fleet mode HTTP port (default {DEFAULT_FLEET_PORT})")
     parser.add_argument("--rift-host", type=str, default="127.0.0.1", help="Fleet mode: RIFT/NORA fleet-registry host (default 127.0.0.1)")
     parser.add_argument("--rift-port", type=int, default=5000, help="Fleet mode: RIFT/NORA fleet-registry port (default 5000)")
+    parser.add_argument("--connect", type=str, default=None, metavar="URL", help="Client mode: no serial port; mirror and control another controller's arm, e.g. --connect http://192.168.0.10:5011")
+    parser.add_argument("--serve", action="store_true", help="Start the HTTP server (web page + RIFT API) in any mode, so browsers/phones stay in sync with this window")
     parser.add_argument("--no-register", action="store_true", help="Fleet mode: don't heartbeat to the fleet registry, just serve the HTTP API")
     args = parser.parse_args()
+    if args.connect and (args.serve or args.mode == "fleet"):
+        parser.error("--connect can't be combined with --serve or --mode fleet (this controller has no arm of its own)")
 
     if args.list:
         list_joysticks()
@@ -409,7 +483,7 @@ def main():
     else:
         print("No joystick found - Joystick mode will be unavailable.")
 
-    port = args.port or autodetect_port()
+    port = None if args.connect else (args.port or autodetect_port())
     ser = None
     if port:
         try:
@@ -418,6 +492,8 @@ def main():
             status = f"Connected to {port} @ {args.baud} baud."
         except serial.SerialException as e:
             status = f"Could not open {port}: {e}"
+    elif args.connect:
+        status = f"Remote arm at {args.connect} (no local serial port)."
     else:
         status = "No Arduino-like serial port found - display-only mode."
     print(status)
@@ -457,10 +533,31 @@ def main():
     fleet_status = {"started": False, "error": None}
 
     def ensure_fleet_started():
+        if args.connect:
+            return  # client mode has no arm of its own to serve
         start_fleet_server(args, motors, fleet_state, fleet_lock, lambda: ser is not None, fleet_status)
 
-    if mode == "fleet":
+    if mode == "fleet" or args.serve:
         ensure_fleet_started()
+        if fleet_status["error"]:
+            print(fleet_status["error"])
+        elif mode != "fleet":
+            status += f"  |  Web: http://{fleet_lan_ip}:{args.fleet_port}"
+            print(f"Web control on http://{fleet_lan_ip}:{args.fleet_port}")
+
+    channel_to_motor = {m["channel"]: n for n, m in motors.items()}
+    prev_local = {}
+    last_mode = mode
+
+    remote = RemoteArm(args.connect, fleet_state["angles"], fleet_lock) if args.connect else None
+    adopted = remote is None  # a client waits for the hub's real angles before its own inputs may write
+
+    def follow_sliders():
+        """Slider positions adopt the shared angles (so web/other-input changes show up)."""
+        with fleet_lock:
+            for sl, n in zip(slider_mode_sliders, sorted(motors)):
+                sl.angle = fleet_state["angles"][n]
+                prev_local[n] = sl.angle
 
     mode_buttons = {
         "joystick": Button((20, MODE_BUTTON_Y, 122, 34), "Joystick"),
@@ -561,16 +658,29 @@ def main():
                 while play_index < len(play_steps) and play_steps[play_index]["t"] <= elapsed:
                     commands = {int(ch): ang for ch, ang in play_steps[play_index]["commands"].items()}
                     last_sent = send(ser, commands, last_sent)
+                    changed = {channel_to_motor[ch]: ang for ch, ang in commands.items() if ch in channel_to_motor}
+                    with fleet_lock:
+                        fleet_state["angles"].update(changed)
+                    if remote is not None:
+                        remote.queue(changed)
                     play_index += 1
+                if mode == "slider":
+                    follow_sliders()
                 if play_index >= len(play_steps):
                     playing = False
                     mode = play_prev_mode
             else:
-                commands = None
+                if mode != last_mode:
+                    prev_local.clear()
+                    if mode == "slider":
+                        follow_sliders()
+                    last_mode = mode
+
+                local_commands = None  # channel -> angle from this mode's own input, if any
                 if mode == "joystick" and js is not None:
-                    commands = joystick_commands(js, motors)
+                    local_commands = joystick_commands(js, motors)
                 elif mode == "slider":
-                    commands = {s.channel: s.angle for s in slider_mode_sliders}
+                    local_commands = {s.channel: s.angle for s in slider_mode_sliders}
                 elif mode == "ik":
                     if geometry_ready(geometry):
                         sol = inverse_kinematics(
@@ -580,24 +690,41 @@ def main():
                         )
                         if sol is not None:
                             ik_reachable = True
-                            commands = {motors[n]["channel"]: a for n, a in sol.items()}
-                            commands[motors[5]["channel"]] = ik_sliders["roll"].angle
-                            commands[motors[6]["channel"]] = motors[6]["max"] if claw_closed else motors[6]["min"]
-                            last_valid_ik_commands = commands
+                            local_commands = {motors[n]["channel"]: a for n, a in sol.items()}
+                            local_commands[motors[5]["channel"]] = ik_sliders["roll"].angle
+                            local_commands[motors[6]["channel"]] = motors[6]["max"] if claw_closed else motors[6]["min"]
+                            last_valid_ik_commands = local_commands
                         else:
                             ik_reachable = False
-                            commands = last_valid_ik_commands  # hold last good pose
-                elif mode == "fleet":
-                    with fleet_lock:
-                        commands = {motors[n]["channel"]: fleet_state["angles"][n] for n in motors}
+                            local_commands = last_valid_ik_commands  # hold last good pose
 
-                if commands is not None:
-                    last_sent = send(ser, commands, last_sent)
-                    if recording:
-                        record_steps.append({
-                            "t": time.time() - record_start,
-                            "commands": {str(ch): ang for ch, ang in commands.items()},
-                        })
+                # Every mode shares one set of angles with the web page / RIFT: inputs that
+                # changed write into it, the rest follow it (see merge_local).
+                if local_commands is not None:
+                    local = {channel_to_motor[ch]: a for ch, a in local_commands.items() if ch in channel_to_motor}
+                    if not adopted:
+                        if remote.synced:  # connected: take the hub's state as-is, don't move the arm
+                            prev_local.clear()
+                            prev_local.update(local)
+                            adopted = True
+                    else:
+                        changed = merge_local(local, prev_local, fleet_state["angles"], fleet_lock)
+                        if remote is not None and changed:
+                            remote.queue(changed)
+                    if mode == "slider":
+                        follow_sliders()
+                with fleet_lock:
+                    commands = {motors[n]["channel"]: fleet_state["angles"][n] for n in motors}
+
+                last_sent = send(ser, commands, last_sent)
+                if recording:
+                    record_steps.append({
+                        "t": time.time() - record_start,
+                        "commands": {str(ch): ang for ch, ang in commands.items()},
+                    })
+
+            if remote is not None:
+                status = f"Remote arm {args.connect}: " + ("connected" if remote.connected else "UNREACHABLE")
 
             # ---- draw ----
             screen.fill(BG_COLOR)
@@ -671,6 +798,8 @@ def main():
             pygame.display.flip()
             clock.tick(args.rate if args.rate > 0 else 30)
     finally:
+        if remote is not None:
+            remote.close()
         if ser is not None:
             ser.close()
         if js is not None:
