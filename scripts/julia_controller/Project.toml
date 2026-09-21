@@ -1,0 +1,17 @@
+name = "ArmJuliaController"
+uuid = "6f6e6172-6d5f-4a72-9200-0000000000a1"
+authors = ["Cursed Entertainment"]
+version = "0.1.0"
+
+[deps]
+SimpleDirectMediaLayer = "98e33af6-2ee5-5afd-9e75-cbc738b767c4"
+LibSerialPort = "a05a14c7-6e3b-5ba9-90a2-45558833e1df"
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+
+[compat]
+julia = "1.9"
+HTTP = "1"

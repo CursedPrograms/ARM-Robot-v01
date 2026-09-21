@@ -9,6 +9,7 @@
 <div align="center">
   <img alt="Python" src="https://img.shields.io/badge/python%20-%23323330.svg?&style=for-the-badge&logo=python&logoColor=white"/>
     <img alt="C++" src="https://img.shields.io/badge/c++%20-%23323330.svg?&style=for-the-badge&logo=c%2B%2B&logoColor=white"/>
+    <img alt="Julia" src="https://img.shields.io/badge/julia%20-%23323330.svg?&style=for-the-badge&logo=julia&logoColor=white"/>
 </div>
 
 ---
@@ -40,6 +41,20 @@ cpp_controller.bat --port COM6 --mode fleet
 
 ---
 
+## Julia Controller
+
+`scripts/julia_controller/` is a Julia rewrite of `controller.py`, for anyone who'd rather use Julia than Python or C++. Same four modes (Joystick/Sliders/IK/Fleet), same macro recording/playback, same `config.json`/`scripts/macros/*.json`/`scripts/web/` - a drop-in equivalent of the other two controllers. It draws its window with SDL2 (via [SimpleDirectMediaLayer.jl](https://github.com/JuliaMultimedia/SimpleDirectMediaLayer.jl), the same library pygame itself is built on) and talks to the Arduino over [LibSerialPort.jl](https://github.com/JuliaIO/LibSerialPort.jl); Fleet mode's HTTP bridge is [HTTP.jl](https://github.com/JuliaWeb/HTTP.jl).
+
+```bat
+julia_controller.bat --list-ports
+julia_controller.bat --port COM6
+julia_controller.bat --port COM6 --mode fleet
+```
+
+`julia_controller.bat` installs the Julia package dependencies on first run (`Pkg.instantiate()`, using `scripts/julia_controller/Project.toml`) and then launches `controller.jl` - no separate build step, same as the Python controller. Requires [Julia](https://julialang.org/downloads/) on `PATH`.
+
+---
+
 ## Fleet Integration
 
 This arm can join the [RIFT](https://github.com/CursedPrograms/RIFT) fleet dashboard, the same way MILA/WHIP/NORA/KIDA do. Both controllers' Fleet mode bridges RIFT's HTTP protocol to the Arduino's USB serial connection: it serves `/status`, `/cmd?motor=&angle=`, and `/reset`, and heartbeats a `/register` call to RIFT/NORA so this arm ("ARM", port `5011`) shows up in the dashboard.
@@ -52,7 +67,7 @@ python scripts/controller.py --list-ports              # find the Arduino's port
 python scripts/controller.py --port COM6 --mode fleet
 ```
 
-Per-motor servo channel, angle range, resting angle, and invert flag all come from `config.json` (see `scripts/motor_config.py`) - the same config `slider_controller.py` uses. `.bat` launchers (`controller.bat`, `slider_controller.bat`, `fleet_server.bat`, `run_joystick_test.bat`, `build_cpp_controller.bat`, `cpp_controller.bat`) live at the repo root alongside `config.json`; the Python and C++ sources themselves stay under `scripts/`.
+Per-motor servo channel, angle range, resting angle, and invert flag all come from `config.json` (see `scripts/motor_config.py`) - the same config `slider_controller.py` uses. `.bat` launchers (`controller.bat`, `slider_controller.bat`, `fleet_server.bat`, `run_joystick_test.bat`, `build_cpp_controller.bat`, `cpp_controller.bat`, `julia_controller.bat`) live at the repo root alongside `config.json`; the Python, C++, and Julia sources themselves stay under `scripts/`.
 
 ---
 

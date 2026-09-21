@@ -44,4 +44,8 @@ scripts/macros/
 
 # C++ controller build output (see build_cpp_controller.bat)
 scripts/cpp_controller/build/
+
+# Julia controller's resolved dependency manifest (see julia_controller.bat)
+scripts/julia_controller/Manifest.toml
+
 TODO.txt
