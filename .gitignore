@@ -48,4 +48,8 @@ scripts/cpp_controller/build/
 # Julia controller's resolved dependency manifest (see julia_controller.bat)
 scripts/julia_controller/Manifest.toml
 
+# C# controller build output (see csharp_controller.bat / csharp_controller.sh)
+scripts/csharp_controller/bin/
+scripts/csharp_controller/obj/
+
 TODO.txt

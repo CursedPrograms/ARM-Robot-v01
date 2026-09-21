@@ -10,6 +10,7 @@
   <img alt="Python" src="https://img.shields.io/badge/python%20-%23323330.svg?&style=for-the-badge&logo=python&logoColor=white"/>
     <img alt="C++" src="https://img.shields.io/badge/c++%20-%23323330.svg?&style=for-the-badge&logo=c%2B%2B&logoColor=white"/>
     <img alt="Julia" src="https://img.shields.io/badge/julia%20-%23323330.svg?&style=for-the-badge&logo=julia&logoColor=white"/>
+    <img alt="C#" src="https://img.shields.io/badge/c%23%20-%23323330.svg?&style=for-the-badge&logo=csharp&logoColor=white"/>
 </div>
 
 ---
@@ -55,6 +56,31 @@ julia_controller.bat --port COM6 --mode fleet
 
 ---
 
+## C# Controller (Windows + Linux)
+
+`scripts/csharp_controller/` is a C# / .NET 8 rewrite of `controller.py` that runs on both Windows and Linux. Same four modes (Joystick/Sliders/IK/Fleet), same macro recording/playback, same `config.json`/`scripts/macros/*.json`/`scripts/web/` as the other controllers. The window is [Avalonia](https://avaloniaui.net/) (cross-platform, built in code rather than XAML), joystick input goes through SDL2 via [Silk.NET.SDL](https://github.com/dotnet/Silk.NET) (which bundles the native SDL2 library), serial is `System.IO.Ports`, and Fleet mode's HTTP bridge is Kestrel (ASP.NET Core), so it binds to the network without needing admin rights.
+
+```bat
+csharp_controller.bat --list-ports
+csharp_controller.bat --port COM6
+csharp_controller.bat --port COM6 --mode fleet
+```
+
+```bash
+chmod +x csharp_controller.sh
+./csharp_controller.sh --list-ports
+./csharp_controller.sh --port /dev/ttyACM0
+```
+
+Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download); the launchers run it with `dotnet run`, which restores NuGet packages on first run.
+
+Notes:
+- `System.IO.Ports` can't read USB device descriptions like pyserial does, so port auto-detect is simpler: on Linux it picks the first `/dev/ttyACM*`/`/dev/ttyUSB*`, on Windows it only auto-picks if there's exactly one COM port. Otherwise pass `--port`.
+- Linux permissions: add yourself to the `dialout` group for serial access (`sudo usermod -aG dialout $USER`) and `input` for joystick access, then log out and back in.
+- If SDL2 fails to load on Linux, install it from your package manager (e.g. `sudo apt install libsdl2-2.0-0`).
+
+---
+
 ## Fleet Integration
 
 This arm can join the [RIFT](https://github.com/CursedPrograms/RIFT) fleet dashboard, the same way MILA/WHIP/NORA/KIDA do. Both controllers' Fleet mode bridges RIFT's HTTP protocol to the Arduino's USB serial connection: it serves `/status`, `/cmd?motor=&angle=`, and `/reset`, and heartbeats a `/register` call to RIFT/NORA so this arm ("ARM", port `5011`) shows up in the dashboard.
@@ -67,7 +93,7 @@ python scripts/controller.py --list-ports              # find the Arduino's port
 python scripts/controller.py --port COM6 --mode fleet
 ```
 
-Per-motor servo channel, angle range, resting angle, and invert flag all come from `config.json` (see `scripts/motor_config.py`) - the same config `slider_controller.py` uses. `.bat` launchers (`controller.bat`, `slider_controller.bat`, `fleet_server.bat`, `run_joystick_test.bat`, `build_cpp_controller.bat`, `cpp_controller.bat`, `julia_controller.bat`) live at the repo root alongside `config.json`; the Python, C++, and Julia sources themselves stay under `scripts/`.
+Per-motor servo channel, angle range, resting angle, and invert flag all come from `config.json` (see `scripts/motor_config.py`) - the same config `slider_controller.py` uses. `.bat` launchers (`controller.bat`, `slider_controller.bat`, `fleet_server.bat`, `run_joystick_test.bat`, `build_cpp_controller.bat`, `cpp_controller.bat`, `julia_controller.bat`, `csharp_controller.bat`/`.sh`) live at the repo root alongside `config.json`; the Python, C++, Julia, and C# sources themselves stay under `scripts/`.
 
 ---
 

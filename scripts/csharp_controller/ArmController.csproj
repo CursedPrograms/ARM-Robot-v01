@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Exe (not WinExe) on purpose: like the other controllers, this prints status/errors to the console alongside the GUI window. -->
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>ArmController</AssemblyName>
+    <RootNamespace>ArmController</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Kestrel, for Fleet mode's HTTP bridge (binds 0.0.0.0 without admin rights on Windows, unlike HttpListener). -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+
+    <PackageReference Include="Avalonia" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.22" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.22" />
+
+    <!-- Bundles the native SDL2 for Windows/Linux/macOS; used only for joystick input. -->
+    <PackageReference Include="Silk.NET.SDL" Version="2.23.0" />
+
+    <PackageReference Include="System.IO.Ports" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>
