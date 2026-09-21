@@ -41,4 +41,7 @@ logs/
 
 # Recorded arm motion macros
 scripts/macros/
+
+# C++ controller build output (see build_cpp_controller.bat)
+scripts/cpp_controller/build/
 TODO.txt
