@@ -28,6 +28,11 @@
 
 ---
 
+PCA9685 Servo Motor 16 Channel Driver
+Arduino Uno
+
+---
+
 ## C++ Controller
 
 `scripts/cpp_controller/` is a native Win32 rewrite of `controller.py` with the same four modes (Joystick/Sliders/IK/Fleet) and the same macro recording/playback, for anyone who'd rather run a standalone `.exe` than install Python/pygame. It reads the same `config.json`, records to the same `scripts/macros/*.json`, and its Fleet mode serves the same `scripts/web/` control page and HTTP API - the two controllers are drop-in equivalents of each other.
