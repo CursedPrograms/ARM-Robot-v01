@@ -9,7 +9,9 @@ Modes (click the buttons, or the Joystick/Sliders/IK mode is picked with
     Joystick - drive motors 1-6 from a joystick (same mapping as before):
         Axis 0 -> Motor 1 (base), Axis 1 -> Motor 2 (shoulder),
         Hat 0 Y -> Motor 3 (elbow), Buttons 2/3 -> Motor 4 (wrist),
-        Axis 2 -> Motor 5 (wrist roll), Button 0 -> Motor 6 (claw)
+        Axis 2 -> Motor 5 (wrist roll), Button 0 (trigger) -> Motor 6 (claw)
+        The hat and buttons 2/3 move their motor BUTTON_STEP_DEG (5) degrees per
+        press. The claw has only two states: trigger held = closed, released = open.
     Sliders  - drag on-screen sliders to set each motor's raw angle directly.
     IK       - drag X/Y/Z/Pitch/Roll sliders to set a target end-effector
                pose; motors 1-4 are solved with inverse_kinematics() from
@@ -83,6 +85,7 @@ HAT_MOTOR3_COMPONENT = 1
 BUTTON_MOTOR4_BACKWARD = 2
 BUTTON_MOTOR4_FORWARD = 3
 BUTTON_MOTOR6_CLOSE = 0
+BUTTON_STEP_DEG = 5  # hat/button motors (3, 4) move this much per press
 DEADZONE = 0.05
 
 # Descriptions that identify likely Arduino USB-serial adapters, for --port auto-detect
@@ -184,20 +187,12 @@ def geometry_ready(geometry):
 
 
 def joystick_commands(js, motors):
-    """Read the joystick and return {channel: angle} for all 6 motors."""
+    """Read the joystick and return {channel: angle} for the stick motors
+    (1, 2, 5) and the claw (6). The hat/button motors (3, 4) step per press
+    instead, see joystick_step()."""
     motor1_val = js.get_axis(AXIS_MOTOR1) if js.get_numaxes() > AXIS_MOTOR1 else 0.0
     motor2_val = js.get_axis(AXIS_MOTOR2) if js.get_numaxes() > AXIS_MOTOR2 else 0.0
-    motor3_val = js.get_hat(HAT_MOTOR3)[HAT_MOTOR3_COMPONENT] if js.get_numhats() > HAT_MOTOR3 else 0.0
     motor5_val = js.get_axis(AXIS_MOTOR5) if js.get_numaxes() > AXIS_MOTOR5 else 0.0
-
-    motor4_forward = js.get_button(BUTTON_MOTOR4_FORWARD) if js.get_numbuttons() > BUTTON_MOTOR4_FORWARD else 0
-    motor4_backward = js.get_button(BUTTON_MOTOR4_BACKWARD) if js.get_numbuttons() > BUTTON_MOTOR4_BACKWARD else 0
-    if motor4_forward and not motor4_backward:
-        motor4_val = 1.0
-    elif motor4_backward and not motor4_forward:
-        motor4_val = -1.0
-    else:
-        motor4_val = 0.0
 
     motor6_close = js.get_button(BUTTON_MOTOR6_CLOSE) if js.get_numbuttons() > BUTTON_MOTOR6_CLOSE else 0
     if motors[6]["invert"]:
@@ -208,21 +203,30 @@ def joystick_commands(js, motors):
         motor1_val = -motor1_val
     if motors[2]["invert"]:
         motor2_val = -motor2_val
-    if motors[3]["invert"]:
-        motor3_val = -motor3_val
-    if motors[4]["invert"]:
-        motor4_val = -motor4_val
     if motors[5]["invert"]:
         motor5_val = -motor5_val
 
     return {
         motors[1]["channel"]: axis_to_angle(motor1_val, motors[1]["min"], motors[1]["max"]),
         motors[2]["channel"]: axis_to_angle(motor2_val, motors[2]["min"], motors[2]["max"]),
-        motors[3]["channel"]: axis_to_angle(motor3_val, motors[3]["min"], motors[3]["max"]),
-        motors[4]["channel"]: axis_to_angle(motor4_val, motors[4]["min"], motors[4]["max"]),
         motors[5]["channel"]: axis_to_angle(motor5_val, motors[5]["min"], motors[5]["max"]),
         motors[6]["channel"]: motor6_angle,
     }
+
+
+def joystick_step(event):
+    """Map a hat/button press event to (motor, direction), or None.
+    direction is +1 or -1 before the motor's invert setting is applied."""
+    if event.type == pygame.JOYBUTTONDOWN:
+        return {
+            BUTTON_MOTOR4_FORWARD: (4, 1),
+            BUTTON_MOTOR4_BACKWARD: (4, -1),
+        }.get(event.button)
+    if event.type == pygame.JOYHATMOTION and event.hat == HAT_MOTOR3:
+        value = event.value[HAT_MOTOR3_COMPONENT]
+        if value != 0:
+            return (3, 1 if value > 0 else -1)
+    return None
 
 
 def list_macros():
@@ -657,7 +661,20 @@ def main():
                                     selected_macro_index = i
 
                 if not playing:
-                    if mode == "slider":
+                    if mode == "joystick" and js is not None and adopted:
+                        step = joystick_step(event)
+                        if step is not None:
+                            n, direction = step
+                            m = motors[n]
+                            if m["invert"]:
+                                direction = -direction
+                            with fleet_lock:
+                                angle = fleet_state["angles"][n] + direction * BUTTON_STEP_DEG
+                                angle = max(m["min"], min(m["max"], angle))
+                                fleet_state["angles"][n] = angle
+                            if remote is not None:
+                                remote.queue({n: angle})
+                    elif mode == "slider":
                         for s in slider_mode_sliders:
                             s.handle_event(event)
                     elif mode == "ik":
