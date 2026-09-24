@@ -42,6 +42,60 @@ Arduino Uno
 
 ---
 
+## Finding the arm's port
+
+Nothing here needs a hard-coded COM port. `scripts/arm/arm.ino` answers a one-word question, so a controller can find the arm by asking:
+
+```
+PC:   WHO
+COM6: I am Arm
+```
+
+Every controller does this when you leave out `--port`: it opens each port (the compiled controllers only try ports that look like Arduino adapters) at 115200 baud, waits about 2 seconds for the board to reset, sends `WHO`, and uses the port that answers `I am Arm`. If none answers it falls back to the old guess (the first port whose description looks like an Arduino, CH340, CP210x or FTDI adapter). `--port COM6` still overrides all of it, and `--list-ports` lists what's there.
+
+- **You must reflash** the board with the current `arm.ino` before it can answer.
+- **Sharing one PC with [DREAM](https://github.com/CursedPrograms/DREAM).** Her sensor board (`dream_sensors.ino`, 9600 baud) answers `WHO` with `I am Dream` the same way, so both projects can run from one computer and each finds its own board, whatever COM numbers Windows hands out. Only one program can hold a serial port, so run one controller per arm.
+- **Python:** `scripts/board_id.py` does the asking (`python scripts/board_id.py` lists every port and who answered). **C++, Go, Rust and Julia** ask only the ports that look like Arduino adapters, so they skip Bluetooth ports that can take a long time to open. **C#** can't read USB descriptions, so it asks every port at once.
+- Asking a port takes about 3 seconds, so `--port` is faster when you know it.
+
+---
+
+## Colour scheme
+
+Every UI takes its colours from one file, `colour_scheme.xml` in the repo root. Edit a value and restart the controller. The compiled controllers read it at start-up too, so colour changes need no rebuild (build once first to get the code that reads it).
+
+```xml
+<colour name="background" value="#33292F"/>
+<colour name="button_active" value="#9C0060"/>
+```
+
+Write each colour on its own line as `name="..." value="#RRGGBB"` (name first; the C++, Rust and Julia loaders read it line by line). A missing file, or a missing or malformed colour, falls back to the built-in default for that one colour.
+
+| Role | Default | Used for |
+|---|---|---|
+| `background` | `#33292F` | Window and page background |
+| `panel`, `border` | `#331F2B`, `#361529` | Rows, list boxes, outlines |
+| `text`, `text_dim` | `#FFFFFF`, `#C9B6C1` | Main text, status lines |
+| `button`, `button_hover`, `button_active`, `button_disabled` | `#361529`, `#691548`, `#9C0060`, `#331F2B` | Buttons (active = the selected mode) |
+| `accent`, `accent_hover` | `#9C0060`, `#C21F82` | Slider knobs, highlights, values |
+| `track`, `selected` | `#691548`, `#691548` | Slider track, the chosen macro |
+| `danger`, `danger_hover`, `warn` | `#963232`, `#AD3A3A`, `#F08C3C` | Record and reset, warnings |
+
+How each front end applies it:
+
+| UI | How |
+|---|---|
+| Python windows (`controller.py`, `slider_controller.py`) | `scripts/colour_scheme.py` supplies the colours |
+| Web page | The controller serves `/colour_scheme.xml`; `app.js` applies it over `style.css`'s defaults |
+| Julia | Read into the drawing constants at start-up |
+| Rust (egui), Go (Fyne) | Applied as the toolkit's theme |
+| C# (Avalonia) | Overrides the Fluent theme's button, slider and list colours |
+| C++ (Win32) | Window, labels and list box, with owner-drawn buttons. Buttons don't show a hover colour, and slider thumbs keep the Windows look |
+
+The Go, Rust, C# and Julia versions were not built or run when this was added, so the first build is worth a look.
+
+---
+
 ## C++ Controller
 
 `scripts/cpp_controller/` is a native Win32 rewrite of `controller.py` with the same four modes (Joystick/Sliders/IK/Fleet) and the same macro recording/playback, for anyone who'd rather run a standalone `.exe` than install Python/pygame. It reads the same `config.json`, records to the same `scripts/macros/*.json`, and its Fleet mode serves the same `scripts/web/` control page and HTTP API - the two controllers are drop-in equivalents of each other.
@@ -89,7 +143,7 @@ chmod +x csharp_controller.sh
 Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download); the launchers run it with `dotnet run`, which restores NuGet packages on first run.
 
 Notes:
-- `System.IO.Ports` can't read USB device descriptions like pyserial does, so port auto-detect is simpler: on Linux it picks the first `/dev/ttyACM*`/`/dev/ttyUSB*`, on Windows it only auto-picks if there's exactly one COM port. Otherwise pass `--port`.
+- `System.IO.Ports` can't read USB device descriptions like pyserial does, so it asks every port `WHO` at once and uses the one that answers `I am Arm` ([Finding the arm's port](#finding-the-arms-port)). If none answers, it falls back to a simpler guess: on Linux the first `/dev/ttyACM*`/`/dev/ttyUSB*`, on Windows only when there's exactly one COM port. Otherwise pass `--port`.
 - Linux permissions: add yourself to the `dialout` group for serial access (`sudo usermod -aG dialout $USER`) and `input` for joystick access, then log out and back in.
 - If SDL2 fails to load on Linux, install it from your package manager (e.g. `sudo apt install libsdl2-2.0-0`).
 
@@ -97,7 +151,7 @@ Notes:
 
 ## Rust Controller (Windows + Linux)
 
-`scripts/rust_controller/` is a Rust rewrite of `controller.py` for Windows and Linux: same four modes, macros, live sync and `--connect` client mode as the others, in one native executable. The window is [egui](https://github.com/emilk/egui) (via `eframe`), serial is the `serialport` crate (USB descriptions are read, so `--port` auto-detects an Arduino/FTDI/CH340 like the Python version), and Fleet mode's HTTP server is `tiny_http`. There is no C library to build against: SDL2 is loaded at runtime just for the joystick, so if it isn't found the controller still runs with Joystick mode disabled.
+`scripts/rust_controller/` is a Rust rewrite of `controller.py` for Windows and Linux: same four modes, macros, live sync and `--connect` client mode as the others, in one native executable. The window is [egui](https://github.com/emilk/egui) (via `eframe`), serial is the `serialport` crate (USB descriptions are read, so `--port` auto-detects an Arduino/FTDI/CH340 like the Python version, preferring the port that answers `I am Arm`), and Fleet mode's HTTP server is `tiny_http`. There is no C library to build against: SDL2 is loaded at runtime just for the joystick, so if it isn't found the controller still runs with Joystick mode disabled.
 
 ```bat
 rust_controller.bat --list-ports
@@ -115,7 +169,7 @@ Requires [Rust](https://rustup.rs/) (the first build downloads and compiles the 
 
 ## Go Controller (Windows + Linux)
 
-`scripts/go_controller/` is a Go rewrite of `controller.py` for Windows and Linux with the same four modes, macros, live sync and `--connect` client mode as the others. The window is [Fyne](https://fyne.io/), serial is `go.bug.st/serial` (USB descriptions are read, so `--port` auto-detects an Arduino/FTDI/CH340), and Fleet mode's HTTP server is the standard library's `net/http`. SDL2 is loaded at runtime (via [purego](https://github.com/ebitengine/purego), no cgo for that part) just for the joystick, so a missing SDL2 only disables Joystick mode.
+`scripts/go_controller/` is a Go rewrite of `controller.py` for Windows and Linux with the same four modes, macros, live sync and `--connect` client mode as the others. The window is [Fyne](https://fyne.io/), serial is `go.bug.st/serial` (USB descriptions are read, so `--port` auto-detects an Arduino/FTDI/CH340, preferring the port that answers `I am Arm`), and Fleet mode's HTTP server is the standard library's `net/http`. SDL2 is loaded at runtime (via [purego](https://github.com/ebitengine/purego), no cgo for that part) just for the joystick, so a missing SDL2 only disables Joystick mode.
 
 ```bat
 go_controller.bat --list-ports

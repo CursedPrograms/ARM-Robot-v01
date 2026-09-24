@@ -2,7 +2,7 @@
     "motors": {
         "1": { "channel": 0, "min": 0,  "max": 270, "rest": 135, "invert": false, "kinematicSign": 1 },
         "2": { "channel": 1, "min": 0,  "max": 270, "rest": 50,  "invert": true,  "kinematicSign": 1 },
-        "3": { "channel": 2, "min": 0,  "max": 270, "rest": 100, "invert": false, "kinematicSign": 1 },
+        "3": { "channel": 2, "min": 0,  "max": 270, "rest": 100, "invert": true, "kinematicSign": 1 },
         "4": { "channel": 3, "min": 65, "max": 205, "rest": 135, "invert": false, "kinematicSign": 1 },
         "5": { "channel": 4, "min": 0,  "max": 270, "rest": 20,  "invert": false, "kinematicSign": 1 },
         "6": { "channel": 5, "min": 40, "max": 145, "rest": 95,  "invert": false, "kinematicSign": 1 }
