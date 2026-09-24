@@ -42,6 +42,68 @@ Arduino Uno
 
 ---
 
+## Controls
+
+### Rest pose
+
+| Motor | 1 base | 2 shoulder | 3 elbow | 4 wrist pitch | 5 wrist roll | 6 claw |
+|---|---|---|---|---|---|---|
+| Rest angle | 135 | 55 | 100 | 230 | 135 | 40 (open) |
+
+The arm goes to this pose:
+
+- **When the Arduino starts up**
+- **When no PC is controlling it.** Every controller resends its angles at least every 0.5 s. If `arm.ino` hears nothing for 2 s (controller closed or crashed, cable pulled), the arm eases back to rest.
+- **When you let go of the stick.** The stick motors spring back to rest, and the claw opens.
+- **When you press Home**, or Reset on the web page
+
+The values live in two places, so change both: `rest` in `config.json` (the controllers) and `REST_ANGLE` in `scripts/arm/arm.ino` (the Arduino, reflash after changing).
+
+### Joystick (Joystick mode)
+
+| Input | Motor | What it does |
+|---|---|---|
+| Stick left/right (axis 0) | 1 base | Follows the stick, centred = rest |
+| Stick forward/back (axis 1) | 2 shoulder | Follows the stick, centred = rest |
+| Twist (axis 2) | 5 wrist roll | Follows the stick, centred = rest |
+| Hat up / down | 3 elbow | 5° per press |
+| Button 3 / button 2 | 4 wrist pitch | 5° per press |
+| Trigger (button 0) | 6 claw | Held = closed, released = open |
+
+Holding a hat direction or button counts as one press, and motors 3 and 4 stay where you stepped them when you let go. Every motor stays inside its `min`/`max` from `config.json`, and `invert` flips its direction.
+
+### Keyboard (every mode except IK)
+
+Click the controller window first, since keys only reach the focused window.
+
+| Keys | Motor | Per press |
+|---|---|---|
+| A / D | 1 base | −5° / +5° |
+| W / S | 2 shoulder | up / down 5° |
+| R / F | 3 elbow | up / down 5° |
+| T / G | 4 wrist pitch | up / down 5° |
+| Q / E | 5 wrist roll | −5° / +5° |
+| Space | 6 claw | Held = closed, released = open |
+| Shift + any key above | | 1° steps for fine positioning |
+| Home | all | Back to the `rest` pose |
+| 1–9 | | Pick a macro |
+| Esc | | Quit |
+
+Holding a key repeats it. Keys write to the same shared angles as everything else, so the sliders, the web page and RIFT follow them. In Joystick mode a key moves a stick motor until you move that stick again.
+
+Keyboard controls are in the Python controller (`controller.py`) only so far.
+
+### Ideas
+
+- Keyboard controls in the C++, C#, Go, Rust and Julia controllers
+- Gamepad (Xbox/PlayStation) mapping: two sticks for the arm, triggers for the claw, bumpers for wrist roll
+- Pick-and-place challenge: a timer in the window for moving an object from A to B, best run saved as a macro
+- Preset macros (wave, bow) on single keys
+- Phone tilt control on the web page: tilt to steer the base and shoulder
+- Mirror mode: one controller driving two arms through `--connect`
+
+---
+
 ## Finding the arm's port
 
 Nothing here needs a hard-coded COM port. `scripts/arm/arm.ino` answers a one-word question, so a controller can find the arm by asking:

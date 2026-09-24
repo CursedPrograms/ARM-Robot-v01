@@ -41,6 +41,9 @@ except ImportError:
 from motor_config import load_motor_config
 from colour_scheme import rgb
 
+# Resend unchanged commands this often, so arm.ino knows the PC is still here.
+KEEPALIVE_SECS = 0.5
+
 # Descriptions that identify likely Arduino USB-serial adapters, for --port auto-detect
 ARDUINO_HINTS = ("arduino", "ch340", "usb-serial", "usb serial", "cp210", "ftdi")
 
@@ -170,6 +173,7 @@ def main():
     ]
 
     last_sent = {}
+    last_write = 0.0
     running = True
     try:
         while running:
@@ -184,7 +188,8 @@ def main():
                         slider.handle_event(event)
 
             commands = {s.channel: s.angle for s in sliders}
-            if commands != last_sent:
+            if commands != last_sent or time.monotonic() - last_write >= KEEPALIVE_SECS:
+                last_write = time.monotonic()
                 line = ",".join(f"{ch}:{ang}" for ch, ang in commands.items())
                 if ser is not None:
                     ser.write((line + "\n").encode("ascii"))

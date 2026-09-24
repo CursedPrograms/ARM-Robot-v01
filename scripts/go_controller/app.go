@@ -38,6 +38,10 @@ const (
 	deadzone             = 0.05
 )
 
+// keepalive: resend unchanged commands this often, so arm.ino knows the PC is
+// still here (it eases back to rest after 2 s of silence).
+const keepalive = 500 * time.Millisecond
+
 type sliderRow struct {
 	motor  int
 	slider *widget.Slider
@@ -101,7 +105,8 @@ type App struct {
 	lastValidIK map[int]int
 	warn        string
 
-	lastSent map[int]int // channel -> angle
+	lastSent  map[int]int // channel -> angle
+	lastWrite time.Time
 
 	macroFiles    []string
 	selectedMacro int
@@ -454,8 +459,13 @@ func (a *App) followSliders() {
 	}
 }
 
+// send writes the commands when they changed, or unchanged every keepalive.
 func (a *App) send(commands map[int]int) {
-	if mapsEqual(commands, a.lastSent) {
+	if mapsEqual(commands, a.lastSent) && time.Since(a.lastWrite) < keepalive {
+		return
+	}
+	a.lastWrite = time.Now()
+	if len(commands) == 0 {
 		return
 	}
 	channels := make([]int, 0, len(commands))
@@ -492,11 +502,16 @@ func mapsEqual(x, y map[int]int) bool {
 // Per-frame update (controller.py's main loop body)
 // ---------------------------------------------------------------------
 
-func axisToAngle(value float64, lo, hi int) int {
+// axisToAngle maps a centred (released) stick to rest and full deflection to lo/hi.
+func axisToAngle(value float64, lo, hi, rest int) int {
 	if math.Abs(value) < deadzone {
-		value = 0
+		return rest
 	}
-	return int(math.RoundToEven((value+1.0)/2.0*float64(hi-lo) + float64(lo)))
+	span := float64(rest - lo)
+	if value > 0 {
+		span = float64(hi - rest)
+	}
+	return int(math.RoundToEven(float64(rest) + value*span))
 }
 
 // joystickCommands returns {channel: angle} for the stick motors (1, 2, 5)
@@ -537,9 +552,9 @@ func (a *App) joystickCommands() map[int]int {
 		claw = m[6].Max
 	}
 	return map[int]int{
-		m[1].Channel: axisToAngle(inv(1, m1), m[1].Min, m[1].Max),
-		m[2].Channel: axisToAngle(inv(2, m2), m[2].Min, m[2].Max),
-		m[5].Channel: axisToAngle(inv(5, m5), m[5].Min, m[5].Max),
+		m[1].Channel: axisToAngle(inv(1, m1), m[1].Min, m[1].Max, m[1].Rest),
+		m[2].Channel: axisToAngle(inv(2, m2), m[2].Min, m[2].Max, m[2].Rest),
+		m[5].Channel: axisToAngle(inv(5, m5), m[5].Min, m[5].Max, m[5].Rest),
 		m[6].Channel: claw,
 	}
 }
@@ -581,6 +596,7 @@ func (a *App) tick() {
 			}
 			a.playIndex++
 		}
+		a.send(a.lastSent) // keepalive between macro steps
 		if a.mode == ModeSlider {
 			a.followSliders()
 		}

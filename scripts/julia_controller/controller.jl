@@ -46,6 +46,9 @@ const BUTTON_MOTOR4_BACKWARD = 2
 const BUTTON_MOTOR4_FORWARD = 3
 const BUTTON_MOTOR6_CLOSE = 0
 const BUTTON_STEP_DEG = 5  # hat/button motors (3, 4) move this much per press
+# Resend unchanged commands this often, so arm.ino knows the PC is still here
+# (it eases back to rest after 2 s of silence).
+const KEEPALIVE_SECS = 0.5
 const DEADZONE = 0.05
 
 # Descriptions that identify likely Arduino USB-serial adapters, for --port auto-detect
@@ -115,9 +118,10 @@ const KNOB_COLOR = SCHEME["accent"]
 # Small helpers
 # =========================================================================
 
-function axis_to_angle(value, lo, hi; deadzone=DEADZONE)
-    abs(value) < deadzone && (value = 0.0)
-    angle = (value + 1.0) / 2.0 * (hi - lo) + lo
+# A centred (released) stick maps to rest; full deflection to lo/hi.
+function axis_to_angle(value, lo, hi, rest; deadzone=DEADZONE)
+    abs(value) < deadzone && return rest
+    angle = rest + value * (value > 0 ? hi - rest : rest - lo)
     return round(Int, angle)
 end
 
@@ -243,9 +247,9 @@ function joystick_commands(js, motors)
     motors[5]["invert"] && (motor5_val = -motor5_val)
 
     return Dict{Int,Int}(
-        motors[1]["channel"] => axis_to_angle(motor1_val, motors[1]["min"], motors[1]["max"]),
-        motors[2]["channel"] => axis_to_angle(motor2_val, motors[2]["min"], motors[2]["max"]),
-        motors[5]["channel"] => axis_to_angle(motor5_val, motors[5]["min"], motors[5]["max"]),
+        motors[1]["channel"] => axis_to_angle(motor1_val, motors[1]["min"], motors[1]["max"], motors[1]["rest"]),
+        motors[2]["channel"] => axis_to_angle(motor2_val, motors[2]["min"], motors[2]["max"], motors[2]["rest"]),
+        motors[5]["channel"] => axis_to_angle(motor5_val, motors[5]["min"], motors[5]["max"], motors[5]["rest"]),
         motors[6]["channel"] => motor6_angle,
     )
 end
@@ -309,9 +313,13 @@ function follow_sliders!(sliders, motor_numbers, fleet_state, prev_local)
     end
 end
 
+const LAST_WRITE = Ref(0.0)
+
+# Sends when the commands changed, or unchanged every KEEPALIVE_SECS.
 function send_commands!(sp, commands, last_sent)
-    if commands != last_sent
-        if sp !== nothing
+    if commands != last_sent || time() - LAST_WRITE[] >= KEEPALIVE_SECS
+        LAST_WRITE[] = time()
+        if sp !== nothing && !isempty(commands)
             line = join(("$ch:$ang" for (ch, ang) in commands), ",")
             write(sp, line * "\n")
         end
@@ -706,6 +714,7 @@ function main()
                     remote !== nothing && queue_remote!(remote, changed)
                     play_index += 1
                 end
+                last_sent = send_commands!(sp, last_sent, last_sent)  # keepalive between macro steps
                 mode == "slider" && follow_sliders!(slider_mode_sliders, motor_numbers, fleet_state, prev_local)
                 if play_index > length(play_steps)
                     playing = false

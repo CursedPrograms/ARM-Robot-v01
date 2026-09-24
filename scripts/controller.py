@@ -12,6 +12,10 @@ Modes (click the buttons, or the Joystick/Sliders/IK mode is picked with
         Axis 2 -> Motor 5 (wrist roll), Button 0 (trigger) -> Motor 6 (claw)
         The hat and buttons 2/3 move their motor BUTTON_STEP_DEG (5) degrees per
         press. The claw has only two states: trigger held = closed, released = open.
+    Keyboard - works in every mode except IK (see README "Controls"):
+        A/D base, W/S shoulder, R/F elbow, T/G wrist pitch, Q/E wrist roll:
+        5 degrees per press (hold to repeat, Shift for 1 degree).
+        Space held = claw closed. Home = back to the rest pose.
     Sliders  - drag on-screen sliders to set each motor's raw angle directly.
     IK       - drag X/Y/Z/Pitch/Roll sliders to set a target end-effector
                pose; motors 1-4 are solved with inverse_kinematics() from
@@ -88,6 +92,25 @@ BUTTON_MOTOR6_CLOSE = 0
 BUTTON_STEP_DEG = 5  # hat/button motors (3, 4) move this much per press
 DEADZONE = 0.05
 
+# Resend unchanged commands this often, so arm.ino knows the PC is still here
+# (it eases back to rest after 2 s of silence).
+KEEPALIVE_SECS = 0.5
+
+# ---- Keyboard wiring (every mode except IK) ----
+KEY_STEPS = {  # key -> (motor, direction before invert)
+    pygame.K_a: (1, -1), pygame.K_d: (1, 1),
+    pygame.K_w: (2, 1), pygame.K_s: (2, -1),
+    pygame.K_r: (3, 1), pygame.K_f: (3, -1),
+    pygame.K_t: (4, 1), pygame.K_g: (4, -1),
+    pygame.K_q: (5, -1), pygame.K_e: (5, 1),
+}
+KEY_CLAW = pygame.K_SPACE
+KEY_REST = pygame.K_HOME
+KEY_STEP_DEG = 5
+KEY_FINE_STEP_DEG = 1  # with Shift held
+KEY_REPEAT_DELAY_MS = 300
+KEY_REPEAT_INTERVAL_MS = 80
+
 # Descriptions that identify likely Arduino USB-serial adapters, for --port auto-detect
 ARDUINO_HINTS = ("arduino", "ch340", "usb-serial", "usb serial", "cp210", "ftdi")
 
@@ -124,11 +147,12 @@ BUTTON_RECORD_COLOR = rgb("danger")
 MACRO_SELECTED_COLOR = rgb("selected")
 
 
-def axis_to_angle(value, lo, hi, deadzone=DEADZONE):
-    """Map a [-1, 1] joystick axis value to [lo, hi] degrees, with deadzone."""
+def axis_to_angle(value, lo, hi, rest, deadzone=DEADZONE):
+    """Map a [-1, 1] joystick axis value to [lo, hi] degrees, with a centred
+    (released) stick at rest."""
     if abs(value) < deadzone:
-        value = 0.0
-    angle = (value + 1.0) / 2.0 * (hi - lo) + lo
+        return rest
+    angle = rest + value * ((hi - rest) if value > 0 else (rest - lo))
     return int(round(angle))
 
 
@@ -207,9 +231,9 @@ def joystick_commands(js, motors):
         motor5_val = -motor5_val
 
     return {
-        motors[1]["channel"]: axis_to_angle(motor1_val, motors[1]["min"], motors[1]["max"]),
-        motors[2]["channel"]: axis_to_angle(motor2_val, motors[2]["min"], motors[2]["max"]),
-        motors[5]["channel"]: axis_to_angle(motor5_val, motors[5]["min"], motors[5]["max"]),
+        motors[1]["channel"]: axis_to_angle(motor1_val, motors[1]["min"], motors[1]["max"], motors[1]["rest"]),
+        motors[2]["channel"]: axis_to_angle(motor2_val, motors[2]["min"], motors[2]["max"], motors[2]["rest"]),
+        motors[5]["channel"]: axis_to_angle(motor5_val, motors[5]["min"], motors[5]["max"], motors[5]["rest"]),
         motors[6]["channel"]: motor6_angle,
     }
 
@@ -450,10 +474,17 @@ class RemoteArm:
             self._stop.wait(self._poll)
 
 
+_last_write = 0.0
+
+
 def send(ser, commands, last_sent):
-    """Send commands (channel:angle) over serial if changed from last_sent. Returns the new last_sent."""
-    if commands != last_sent:
-        if ser is not None:
+    """Send commands (channel:angle) over serial if changed from last_sent, or
+    unchanged every KEEPALIVE_SECS. Returns the new last_sent."""
+    global _last_write
+    now = time.monotonic()
+    if commands != last_sent or now - _last_write >= KEEPALIVE_SECS:
+        _last_write = now
+        if ser is not None and commands:
             line = ",".join(f"{ch}:{ang}" for ch, ang in commands.items())
             ser.write((line + "\n").encode("ascii"))
         return dict(commands)
@@ -516,6 +547,7 @@ def main():
 
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     pygame.display.set_caption("Arm Controller")
+    pygame.key.set_repeat(KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS)
     font = pygame.font.SysFont(None, 24)
     small_font = pygame.font.SysFont(None, 18)
     clock = pygame.time.Clock()
@@ -602,6 +634,27 @@ def main():
     last_sent = {}
     last_valid_ik_commands = None
 
+    def set_shared(changed):
+        """Write {motor: angle} into the shared angles (and to the hub, as a client)."""
+        with fleet_lock:
+            fleet_state["angles"].update(changed)
+        if remote is not None:
+            remote.queue(changed)
+
+    def step_motor(n, direction, deg):
+        """Move motor n by deg in direction +1/-1 (before invert), within its limits."""
+        m = motors[n]
+        if m["invert"]:
+            direction = -direction
+        with fleet_lock:
+            angle = max(m["min"], min(m["max"], fleet_state["angles"][n] + direction * deg))
+        set_shared({n: angle})
+
+    def set_claw(closed):
+        if motors[6]["invert"]:
+            closed = not closed
+        set_shared({6: motors[6]["max"] if closed else motors[6]["min"]})
+
     def macro_row_rect(i):
         return pygame.Rect(30, MACRO_LIST_Y + i * MACRO_ROW_H, 500, MACRO_ROW_H)
 
@@ -660,20 +713,21 @@ def main():
                                 if macro_row_rect(i).collidepoint(pos):
                                     selected_macro_index = i
 
+                if not playing and mode != "ik" and adopted:
+                    if event.type == pygame.KEYDOWN and event.key in KEY_STEPS:
+                        n, direction = KEY_STEPS[event.key]
+                        fine = event.mod & pygame.KMOD_SHIFT
+                        step_motor(n, direction, KEY_FINE_STEP_DEG if fine else KEY_STEP_DEG)
+                    elif event.type in (pygame.KEYDOWN, pygame.KEYUP) and event.key == KEY_CLAW:
+                        set_claw(event.type == pygame.KEYDOWN)
+                    elif event.type == pygame.KEYDOWN and event.key == KEY_REST:
+                        set_shared({n: motors[n]["rest"] for n in motors})
+
                 if not playing:
                     if mode == "joystick" and js is not None and adopted:
                         step = joystick_step(event)
                         if step is not None:
-                            n, direction = step
-                            m = motors[n]
-                            if m["invert"]:
-                                direction = -direction
-                            with fleet_lock:
-                                angle = fleet_state["angles"][n] + direction * BUTTON_STEP_DEG
-                                angle = max(m["min"], min(m["max"], angle))
-                                fleet_state["angles"][n] = angle
-                            if remote is not None:
-                                remote.queue({n: angle})
+                            step_motor(*step, BUTTON_STEP_DEG)
                     elif mode == "slider":
                         for s in slider_mode_sliders:
                             s.handle_event(event)
@@ -693,6 +747,7 @@ def main():
                     if remote is not None:
                         remote.queue(changed)
                     play_index += 1
+                last_sent = send(ser, last_sent, last_sent)  # keepalive between macro steps
                 if mode == "slider":
                     follow_sliders()
                 if play_index >= len(play_steps):

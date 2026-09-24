@@ -60,6 +60,9 @@ constexpr int MARGIN_TOP = 250;
 constexpr int ROW_HEIGHT = 60;
 constexpr double DEADZONE = 0.05;
 constexpr int BUTTON_STEP_DEG = 5; // hat/button motors (3, 4) move this much per press
+// Resend unchanged commands this often, so arm.ino knows the PC is still here
+// (it eases back to rest after 2 s of silence).
+constexpr double KEEPALIVE_SECS = 0.5;
 
 // ---- Control IDs ----
 enum ControlId {
@@ -148,6 +151,7 @@ struct App {
     Mode playPrevMode = Mode::Slider;
 
     std::map<int, int> lastSent; // channel -> angle
+    Clock::time_point lastWrite;
 
     // Last angle each local input produced, keyed by motor number - see mergeLocal().
     std::map<int, int> prevLocal;
@@ -195,9 +199,10 @@ std::string getLocalLanIp() {
     return ip;
 }
 
-int axisToAngle(double value, int lo, int hi, double deadzone = DEADZONE) {
-    if (std::fabs(value) < deadzone) value = 0.0;
-    double angle = (value + 1.0) / 2.0 * (hi - lo) + lo;
+// A centred (released) stick maps to rest; full deflection to lo/hi.
+int axisToAngle(double value, int lo, int hi, int rest, double deadzone = DEADZONE) {
+    if (std::fabs(value) < deadzone) return rest;
+    double angle = rest + value * (value > 0 ? hi - rest : rest - lo);
     return static_cast<int>(std::lround(angle));
 }
 
@@ -218,9 +223,9 @@ std::map<int, int> joystickCommands(const JoystickState& js, const MotorMap& mot
     if (motors.at(6).invert) closeBtn = !closeBtn;
 
     std::map<int, int> cmd;
-    cmd[motors.at(1).channel] = axisToAngle(m1, motors.at(1).min, motors.at(1).max);
-    cmd[motors.at(2).channel] = axisToAngle(m2, motors.at(2).min, motors.at(2).max);
-    cmd[motors.at(5).channel] = axisToAngle(m5, motors.at(5).min, motors.at(5).max);
+    cmd[motors.at(1).channel] = axisToAngle(m1, motors.at(1).min, motors.at(1).max, motors.at(1).rest);
+    cmd[motors.at(2).channel] = axisToAngle(m2, motors.at(2).min, motors.at(2).max, motors.at(2).rest);
+    cmd[motors.at(5).channel] = axisToAngle(m5, motors.at(5).min, motors.at(5).max, motors.at(5).rest);
     cmd[motors.at(6).channel] = closeBtn ? motors.at(6).max : motors.at(6).min;
     return cmd;
 }
@@ -236,8 +241,12 @@ std::vector<std::pair<int, int>> joystickSteps(const JoystickState& js, int prev
     return steps;
 }
 
+// Sends when the commands changed, or unchanged every KEEPALIVE_SECS.
 void sendCommands(App& app, const std::map<int, int>& commands) {
-    if (commands == app.lastSent) return;
+    auto now = Clock::now();
+    if (commands == app.lastSent && std::chrono::duration<double>(now - app.lastWrite).count() < KEEPALIVE_SECS) return;
+    app.lastWrite = now;
+    if (commands.empty()) return;
     std::string line;
     for (const auto& kv : commands) {
         if (!line.empty()) line += ",";
@@ -422,6 +431,7 @@ void tick(App& app) {
             publishByChannel(app, app.playSteps[app.playIndex].commands);
             app.playIndex++;
         }
+        sendCommands(app, app.lastSent); // keepalive between macro steps
         if (app.mode == Mode::Slider) followSliders(app);
         if (app.playIndex >= app.playSteps.size()) {
             app.playing = false;

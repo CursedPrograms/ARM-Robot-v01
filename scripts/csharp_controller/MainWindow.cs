@@ -29,6 +29,9 @@ public sealed class MainWindow : Window
     const int ButtonMotor4Backward = 2, ButtonMotor4Forward = 3, ButtonMotor6Close = 0;
     const double Deadzone = 0.05;
     const int ButtonStepDeg = 5; // hat/button motors (3, 4) move this much per press
+    // Resend unchanged commands this often, so arm.ino knows the PC is still here
+    // (it eases back to rest after 2 s of silence).
+    static readonly TimeSpan Keepalive = TimeSpan.FromSeconds(0.5);
 
     sealed class SliderRow
     {
@@ -89,6 +92,7 @@ public sealed class MainWindow : Window
     ControlMode _playPrevMode;
 
     Dictionary<int, int> _lastSent = new(); // channel -> angle
+    DateTime _lastWrite;
     Dictionary<int, int> _prevLocal = new(); // last angle each local input produced, by motor number (see MergeLocal)
     ControlMode _lastMode;
     readonly RemoteArm? _remote;
@@ -393,10 +397,11 @@ public sealed class MainWindow : Window
     // Per-frame update (controller.py's main loop body)
     // =====================================================================
 
-    static int AxisToAngle(double value, int lo, int hi)
+    // A centred (released) stick maps to rest; full deflection to lo/hi.
+    static int AxisToAngle(double value, int lo, int hi, int rest)
     {
-        if (Math.Abs(value) < Deadzone) value = 0.0;
-        return (int)Math.Round((value + 1.0) / 2.0 * (hi - lo) + lo);
+        if (Math.Abs(value) < Deadzone) return rest;
+        return (int)Math.Round(rest + value * (value > 0 ? hi - rest : rest - lo));
     }
 
     // Returns {channel: angle} for the stick motors (1, 2, 5) and the claw (6).
@@ -431,9 +436,9 @@ public sealed class MainWindow : Window
 
         return new Dictionary<int, int>
         {
-            [_motors[1].Channel] = AxisToAngle(m1, _motors[1].Min, _motors[1].Max),
-            [_motors[2].Channel] = AxisToAngle(m2, _motors[2].Min, _motors[2].Max),
-            [_motors[5].Channel] = AxisToAngle(m5, _motors[5].Min, _motors[5].Max),
+            [_motors[1].Channel] = AxisToAngle(m1, _motors[1].Min, _motors[1].Max, _motors[1].Rest),
+            [_motors[2].Channel] = AxisToAngle(m2, _motors[2].Min, _motors[2].Max, _motors[2].Rest),
+            [_motors[5].Channel] = AxisToAngle(m5, _motors[5].Min, _motors[5].Max, _motors[5].Rest),
             [_motors[6].Channel] = close ? _motors[6].Max : _motors[6].Min,
         };
     }
@@ -455,9 +460,13 @@ public sealed class MainWindow : Window
     static bool SameCommands(Dictionary<int, int> a, Dictionary<int, int> b) =>
         a.Count == b.Count && a.All(kv => b.TryGetValue(kv.Key, out int v) && v == kv.Value);
 
+    // Sends when the commands changed, or unchanged every Keepalive.
     void Send(Dictionary<int, int> commands)
     {
-        if (SameCommands(commands, _lastSent)) return;
+        var now = DateTime.UtcNow;
+        if (SameCommands(commands, _lastSent) && now - _lastWrite < Keepalive) return;
+        _lastWrite = now;
+        if (commands.Count == 0) return;
         string line = string.Join(",", commands.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}:{kv.Value}"));
         _serial.WriteLine(line);
         _lastSent = new Dictionary<int, int>(commands);
@@ -558,6 +567,7 @@ public sealed class MainWindow : Window
                 PublishByChannel(_playSteps[_playIndex].Commands);
                 _playIndex++;
             }
+            Send(_lastSent); // keepalive between macro steps
             if (_mode == ControlMode.Slider) FollowSliders();
             _btnPlay.Content = $"Stop {_playIndex}/{_playSteps.Count}";
             if (_playIndex >= _playSteps.Count) StopPlayback();

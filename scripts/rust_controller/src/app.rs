@@ -34,6 +34,9 @@ const BUTTON_MOTOR4_BACKWARD: i32 = 2;
 const BUTTON_MOTOR4_FORWARD: i32 = 3;
 const BUTTON_MOTOR6_CLOSE: i32 = 0;
 const BUTTON_STEP_DEG: i32 = 5; // hat/button motors (3, 4) move this much per press
+// Resend unchanged commands this often, so arm.ino knows the PC is still here
+// (it eases back to rest after 2 s of silence).
+const KEEPALIVE: Duration = Duration::from_millis(500);
 const DEADZONE: f64 = 0.05;
 
 #[derive(Default)]
@@ -82,6 +85,7 @@ pub struct App {
     warn: String,
 
     last_sent: BTreeMap<i32, i32>, // channel -> angle
+    last_write: Option<Instant>,
 
     macro_files: Vec<PathBuf>,
     selected_macro: Option<usize>,
@@ -95,9 +99,13 @@ pub struct App {
     play_prev_mode: Mode,
 }
 
-fn axis_to_angle(value: f64, lo: i32, hi: i32) -> i32 {
-    let value = if value.abs() < DEADZONE { 0.0 } else { value };
-    ((value + 1.0) / 2.0 * (hi - lo) as f64 + lo as f64).round() as i32
+/// A centred (released) stick maps to rest; full deflection to lo/hi.
+fn axis_to_angle(value: f64, lo: i32, hi: i32, rest: i32) -> i32 {
+    if value.abs() < DEADZONE {
+        return rest;
+    }
+    let span = if value > 0.0 { hi - rest } else { rest - lo };
+    (rest as f64 + value * span as f64).round() as i32
 }
 
 impl App {
@@ -174,6 +182,7 @@ impl App {
             ik_reachable: true,
             warn: String::new(),
             last_sent: BTreeMap::new(),
+            last_write: None,
             macro_files: macros::list(),
             selected_macro: None,
             recording: false,
@@ -256,8 +265,14 @@ impl App {
         }
     }
 
+    /// Sends when the commands changed, or unchanged every KEEPALIVE.
     fn send(&mut self, commands: &BTreeMap<i32, i32>) {
-        if *commands == self.last_sent {
+        let due = self.last_write.map_or(true, |t| t.elapsed() >= KEEPALIVE);
+        if *commands == self.last_sent && !due {
+            return;
+        }
+        self.last_write = Some(Instant::now());
+        if commands.is_empty() {
             return;
         }
         let line = commands.iter().map(|(ch, a)| format!("{ch}:{a}")).collect::<Vec<_>>().join(",");
@@ -304,9 +319,9 @@ impl App {
         (m1, m2, m5) = (inv(1, m1), inv(2, m2), inv(5, m5));
 
         BTreeMap::from([
-            (m[&1].channel, axis_to_angle(m1, m[&1].min, m[&1].max)),
-            (m[&2].channel, axis_to_angle(m2, m[&2].min, m[&2].max)),
-            (m[&5].channel, axis_to_angle(m5, m[&5].min, m[&5].max)),
+            (m[&1].channel, axis_to_angle(m1, m[&1].min, m[&1].max, m[&1].rest)),
+            (m[&2].channel, axis_to_angle(m2, m[&2].min, m[&2].max, m[&2].rest)),
+            (m[&5].channel, axis_to_angle(m5, m[&5].min, m[&5].max, m[&5].rest)),
             (m[&6].channel, if close { m[&6].max } else { m[&6].min }),
         ])
     }
@@ -348,6 +363,8 @@ impl App {
                 }
                 self.play_index += 1;
             }
+            let last = self.last_sent.clone();
+            self.send(&last); // keepalive between macro steps
             if self.mode == Mode::Slider {
                 self.follow_sliders();
             }

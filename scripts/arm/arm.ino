@@ -17,10 +17,21 @@ Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver(0x40);
 #define LERP_FACTOR 0.15
 #define UPDATE_INTERVAL_MS 15
 
+// Rest pose for channels 0-5 (motors 1-6). The arm starts here, and eases back
+// here when the PC stops sending. Keep in sync with config.json's "rest" values.
+#define NUM_MOTORS 6
+const int REST_ANGLE[NUM_MOTORS] = {135, 55, 100, 230, 135, 40};
+
+// The controllers resend their command line at least every 0.5 s while
+// running. No command for this long means the PC program closed or crashed.
+#define LINK_TIMEOUT_MS 2000
+
 float currentAngle[NUM_CHANNELS];
 float targetAngle[NUM_CHANNELS];
 bool channelActive[NUM_CHANNELS];
 unsigned long lastUpdate = 0;
+unsigned long lastCommand = 0;
+bool linked = false; // true while a controller is sending commands
 
 int angleToPulse(int angle) {
   return map(angle, 0, 270, SERVOMIN, SERVOMAX);
@@ -40,13 +51,17 @@ void setup() {
   pwm.setPWMFreq(50);
   delay(1000);
 
-  // Startup position (same as your original sketch)
-  setChannel(0, 0);
-  setChannel(1, 0);
-  setChannel(2, 170); // 30 Min
-  setChannel(3, 140);
-  setChannel(4, 180);
-  setChannel(5, 0);
+  for (int ch = 0; ch < NUM_MOTORS; ch++) {
+    setChannel(ch, REST_ANGLE[ch]);
+  }
+}
+
+// Eases every motor back to the rest pose (via stepTowardTargets).
+void goToRest() {
+  for (int ch = 0; ch < NUM_MOTORS; ch++) {
+    targetAngle[ch] = REST_ANGLE[ch];
+    channelActive[ch] = true;
+  }
 }
 
 void loop() {
@@ -58,10 +73,16 @@ void loop() {
       Serial.println("I am Arm");  // lets the PC find this board by name
     } else if (line.length() > 0) {
       applyCommandLine(line);
+      lastCommand = millis();
+      linked = true;
     }
   }
 
   unsigned long now = millis();
+  if (linked && now - lastCommand > LINK_TIMEOUT_MS) {
+    linked = false;
+    goToRest();
+  }
   if (now - lastUpdate >= UPDATE_INTERVAL_MS) {
     lastUpdate = now;
     stepTowardTargets();
