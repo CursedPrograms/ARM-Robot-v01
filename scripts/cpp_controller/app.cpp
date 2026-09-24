@@ -59,6 +59,7 @@ constexpr int MACRO_LIST_H = 90;
 constexpr int MARGIN_TOP = 250;
 constexpr int ROW_HEIGHT = 60;
 constexpr double DEADZONE = 0.05;
+constexpr int BUTTON_STEP_DEG = 5; // hat/button motors (3, 4) move this much per press
 
 // ---- Control IDs ----
 enum ControlId {
@@ -107,6 +108,8 @@ struct App {
 
     Joystick joystick;
     bool joystickAvailable = false;
+    int prevHatY = 0;             // last frame's hat/buttons, to step once per press
+    unsigned long prevButtons = 0;
 
     Mode mode = Mode::Slider;
 
@@ -199,35 +202,38 @@ int axisToAngle(double value, int lo, int hi, double deadzone = DEADZONE) {
 }
 
 // Mirrors controller.py's joystick_commands(): returns {channel: angle} for
-// all 6 motors.
+// the stick motors (1, 2, 5) and the claw (6). The hat/button motors (3, 4)
+// step per press instead, see joystickSteps().
 std::map<int, int> joystickCommands(const JoystickState& js, const MotorMap& motors) {
     double m1 = js.numAxes > 0 ? js.axis[0] : 0.0;
     double m2 = js.numAxes > 1 ? js.axis[1] : 0.0;
-    double m3 = static_cast<double>(js.hatY); // HAT_MOTOR3_COMPONENT = Y
     double m5 = js.numAxes > 2 ? js.axis[2] : 0.0;
-
-    bool forward = js.numButtons > 3 && ((js.buttons >> 3) & 1);
-    bool backward = js.numButtons > 2 && ((js.buttons >> 2) & 1);
-    double m4 = (forward && !backward) ? 1.0 : (backward && !forward ? -1.0 : 0.0);
 
     bool closeBtn = js.numButtons > 0 && (js.buttons & 1);
 
     auto inv = [&](int n, double v) { return motors.at(n).invert ? -v : v; };
     m1 = inv(1, m1);
     m2 = inv(2, m2);
-    m3 = inv(3, m3);
-    m4 = inv(4, m4);
     m5 = inv(5, m5);
     if (motors.at(6).invert) closeBtn = !closeBtn;
 
     std::map<int, int> cmd;
     cmd[motors.at(1).channel] = axisToAngle(m1, motors.at(1).min, motors.at(1).max);
     cmd[motors.at(2).channel] = axisToAngle(m2, motors.at(2).min, motors.at(2).max);
-    cmd[motors.at(3).channel] = axisToAngle(m3, motors.at(3).min, motors.at(3).max);
-    cmd[motors.at(4).channel] = axisToAngle(m4, motors.at(4).min, motors.at(4).max);
     cmd[motors.at(5).channel] = axisToAngle(m5, motors.at(5).min, motors.at(5).max);
     cmd[motors.at(6).channel] = closeBtn ? motors.at(6).max : motors.at(6).min;
     return cmd;
+}
+
+// Mirrors controller.py's joystick_step(): the (motor, direction) pairs for
+// hat/buttons pressed since last frame, direction +1/-1 before invert.
+std::vector<std::pair<int, int>> joystickSteps(const JoystickState& js, int prevHatY, unsigned long prevButtons) {
+    std::vector<std::pair<int, int>> steps;
+    if (js.hatY != 0 && js.hatY != prevHatY) steps.push_back({3, js.hatY > 0 ? 1 : -1});
+    auto pressed = [&](int b) { return js.numButtons > b && ((js.buttons >> b) & 1) && !((prevButtons >> b) & 1); };
+    if (pressed(3)) steps.push_back({4, 1});
+    if (pressed(2)) steps.push_back({4, -1});
+    return steps;
 }
 
 void sendCommands(App& app, const std::map<int, int>& commands) {
@@ -430,7 +436,23 @@ void tick(App& app) {
 
     if (app.mode == Mode::Joystick && app.joystickAvailable) {
         JoystickState state;
-        if (app.joystick.poll(state)) local = toMotorKeyed(app, joystickCommands(state, app.motors));
+        if (app.joystick.poll(state)) {
+            local = toMotorKeyed(app, joystickCommands(state, app.motors));
+            if (app.adopted) {
+                std::map<int, int> changed;
+                for (auto [n, dir] : joystickSteps(state, app.prevHatY, app.prevButtons)) {
+                    const auto& m = app.motors.at(n);
+                    if (m.invert) dir = -dir;
+                    std::lock_guard<std::mutex> lock(app.fleetState.mutex);
+                    int angle = std::clamp(app.fleetState.angles[n] + dir * BUTTON_STEP_DEG, m.min, m.max);
+                    app.fleetState.angles[n] = angle;
+                    changed[n] = angle;
+                }
+                if (app.remoteActive && !changed.empty()) app.remote.queue(changed);
+            }
+            app.prevHatY = state.hatY;
+            app.prevButtons = state.buttons;
+        }
     } else if (app.mode == Mode::Slider) {
         std::map<int, int> byMotor;
         for (auto& row : app.sliderRows) {

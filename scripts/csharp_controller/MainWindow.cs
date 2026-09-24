@@ -28,6 +28,7 @@ public sealed class MainWindow : Window
     const int HatMotor3 = 0;
     const int ButtonMotor4Backward = 2, ButtonMotor4Forward = 3, ButtonMotor6Close = 0;
     const double Deadzone = 0.05;
+    const int ButtonStepDeg = 5; // hat/button motors (3, 4) move this much per press
 
     sealed class SliderRow
     {
@@ -91,6 +92,8 @@ public sealed class MainWindow : Window
     Dictionary<int, int> _prevLocal = new(); // last angle each local input produced, by motor number (see MergeLocal)
     ControlMode _lastMode;
     readonly RemoteArm? _remote;
+    int _prevHatY; // last frame's hat/buttons, to step once per press
+    bool _prevForward, _prevBackward;
     bool _adopted; // a client waits for the hub's real angles before its own inputs may write
 
     // ---- fleet ----
@@ -396,6 +399,9 @@ public sealed class MainWindow : Window
         return (int)Math.Round((value + 1.0) / 2.0 * (hi - lo) + lo);
     }
 
+    // Returns {channel: angle} for the stick motors (1, 2, 5) and the claw (6).
+    // The hat/button motors (3, 4) step ButtonStepDeg per press, written
+    // straight into the shared angles.
     Dictionary<int, int> JoystickCommands()
     {
         var js = _joystick!;
@@ -403,27 +409,47 @@ public sealed class MainWindow : Window
 
         double m1 = js.Axis(AxisMotor1);
         double m2 = js.Axis(AxisMotor2);
-        double m3 = js.HatY(HatMotor3);
         double m5 = js.Axis(AxisMotor5);
 
+        int hatY = js.HatY(HatMotor3);
         bool forward = js.Button(ButtonMotor4Forward), backward = js.Button(ButtonMotor4Backward);
-        double m4 = forward && !backward ? 1.0 : backward && !forward ? -1.0 : 0.0;
+        if (_adopted)
+        {
+            if (hatY != 0 && hatY != _prevHatY) StepMotor(3, hatY > 0 ? 1 : -1);
+            if (forward && !_prevForward) StepMotor(4, 1);
+            if (backward && !_prevBackward) StepMotor(4, -1);
+        }
+        _prevHatY = hatY;
+        _prevForward = forward;
+        _prevBackward = backward;
 
         bool close = js.Button(ButtonMotor6Close);
         if (_motors[6].Invert) close = !close;
 
         double Inv(int n, double v) => _motors[n].Invert ? -v : v;
-        m1 = Inv(1, m1); m2 = Inv(2, m2); m3 = Inv(3, m3); m4 = Inv(4, m4); m5 = Inv(5, m5);
+        m1 = Inv(1, m1); m2 = Inv(2, m2); m5 = Inv(5, m5);
 
         return new Dictionary<int, int>
         {
             [_motors[1].Channel] = AxisToAngle(m1, _motors[1].Min, _motors[1].Max),
             [_motors[2].Channel] = AxisToAngle(m2, _motors[2].Min, _motors[2].Max),
-            [_motors[3].Channel] = AxisToAngle(m3, _motors[3].Min, _motors[3].Max),
-            [_motors[4].Channel] = AxisToAngle(m4, _motors[4].Min, _motors[4].Max),
             [_motors[5].Channel] = AxisToAngle(m5, _motors[5].Min, _motors[5].Max),
             [_motors[6].Channel] = close ? _motors[6].Max : _motors[6].Min,
         };
+    }
+
+    // Moves motor n ButtonStepDeg in direction +1/-1 (before invert), within its limits.
+    void StepMotor(int n, int direction)
+    {
+        var m = _motors[n];
+        if (m.Invert) direction = -direction;
+        int angle;
+        lock (_fleetState.Lock)
+        {
+            angle = Math.Clamp(_fleetState.Angles[n] + direction * ButtonStepDeg, m.Min, m.Max);
+            _fleetState.Angles[n] = angle;
+        }
+        _remote?.Queue(new Dictionary<int, int> { [n] = angle });
     }
 
     static bool SameCommands(Dictionary<int, int> a, Dictionary<int, int> b) =>

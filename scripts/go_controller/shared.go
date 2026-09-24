@@ -40,6 +40,20 @@ func (s *Shared) Set(motor, angle int) {
 	s.mu.Unlock()
 }
 
+// Step adds delta to motor's angle, kept within [lo, hi], and returns the new angle.
+func (s *Shared) Step(motor, delta, lo, hi int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := s.angles[motor] + delta
+	if a < lo {
+		a = lo
+	} else if a > hi {
+		a = hi
+	}
+	s.angles[motor] = a
+	return a
+}
+
 func (s *Shared) Get(motor int) (int, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

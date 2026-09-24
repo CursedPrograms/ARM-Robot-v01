@@ -34,6 +34,7 @@ const (
 	buttonMotor4Backward = 2
 	buttonMotor4Forward  = 3
 	buttonMotor6Close    = 0
+	buttonStepDeg        = 5 // hat/button motors (3, 4) move this much per press
 	deadzone             = 0.05
 )
 
@@ -87,6 +88,10 @@ type App struct {
 	prevLocal map[int]int // last angle each local input produced, by motor number
 	remote    *RemoteArm
 	adopted   bool // a client waits for the hub's real angles before its own inputs may write
+
+	// last frame's hat/buttons, to step once per press
+	prevHatY                  int
+	prevForward, prevBackward bool
 
 	fleet      *FleetServer
 	fleetError string
@@ -494,20 +499,29 @@ func axisToAngle(value float64, lo, hi int) int {
 	return int(math.RoundToEven((value+1.0)/2.0*float64(hi-lo) + float64(lo)))
 }
 
+// joystickCommands returns {channel: angle} for the stick motors (1, 2, 5)
+// and the claw (6). The hat/button motors (3, 4) step buttonStepDeg per
+// press, written straight into the shared angles.
 func (a *App) joystickCommands() map[int]int {
 	js := a.joystick
 	js.Update()
 	m := a.motors
 
 	m1, m2, m5 := js.Axis(axisMotor1), js.Axis(axisMotor2), js.Axis(axisMotor5)
-	m3 := float64(js.HatY(hatMotor3))
+	hatY := js.HatY(hatMotor3)
 	forward, backward := js.Button(buttonMotor4Forward), js.Button(buttonMotor4Backward)
-	m4 := 0.0
-	if forward && !backward {
-		m4 = 1
-	} else if backward && !forward {
-		m4 = -1
+	if a.adopted {
+		if hatY != 0 && hatY != a.prevHatY {
+			a.stepMotor(3, hatY)
+		}
+		if forward && !a.prevForward {
+			a.stepMotor(4, 1)
+		}
+		if backward && !a.prevBackward {
+			a.stepMotor(4, -1)
+		}
 	}
+	a.prevHatY, a.prevForward, a.prevBackward = hatY, forward, backward
 	closeClaw := js.Button(buttonMotor6Close)
 	if m[6].Invert {
 		closeClaw = !closeClaw
@@ -525,10 +539,20 @@ func (a *App) joystickCommands() map[int]int {
 	return map[int]int{
 		m[1].Channel: axisToAngle(inv(1, m1), m[1].Min, m[1].Max),
 		m[2].Channel: axisToAngle(inv(2, m2), m[2].Min, m[2].Max),
-		m[3].Channel: axisToAngle(inv(3, m3), m[3].Min, m[3].Max),
-		m[4].Channel: axisToAngle(inv(4, m4), m[4].Min, m[4].Max),
 		m[5].Channel: axisToAngle(inv(5, m5), m[5].Min, m[5].Max),
 		m[6].Channel: claw,
+	}
+}
+
+// stepMotor moves motor n buttonStepDeg in direction +1/-1 (before invert), within its limits.
+func (a *App) stepMotor(n, direction int) {
+	m := a.motors[n]
+	if m.Invert {
+		direction = -direction
+	}
+	angle := a.shared.Step(n, direction*buttonStepDeg, m.Min, m.Max)
+	if a.remote != nil {
+		a.shared.Queue(map[int]int{n: angle})
 	}
 }
 

@@ -45,6 +45,7 @@ const HAT_MOTOR3 = 0
 const BUTTON_MOTOR4_BACKWARD = 2
 const BUTTON_MOTOR4_FORWARD = 3
 const BUTTON_MOTOR6_CLOSE = 0
+const BUTTON_STEP_DEG = 5  # hat/button motors (3, 4) move this much per press
 const DEADZONE = 0.05
 
 # Descriptions that identify likely Arduino USB-serial adapters, for --port auto-detect
@@ -222,25 +223,16 @@ function find_system_font()
     return nothing
 end
 
+# {channel => angle} for the stick motors (1, 2, 5) and the claw (6). The
+# hat/button motors (3, 4) step per press instead, see joystick_steps!().
 function joystick_commands(js, motors)
     SDL_JoystickUpdate()
     numaxes = SDL_JoystickNumAxes(js)
-    numhats = SDL_JoystickNumHats(js)
     numbuttons = SDL_JoystickNumButtons(js)
 
     motor1_val = numaxes > AXIS_MOTOR1 ? SDL_JoystickGetAxis(js, AXIS_MOTOR1) / 32768.0 : 0.0
     motor2_val = numaxes > AXIS_MOTOR2 ? SDL_JoystickGetAxis(js, AXIS_MOTOR2) / 32768.0 : 0.0
     motor5_val = numaxes > AXIS_MOTOR5 ? SDL_JoystickGetAxis(js, AXIS_MOTOR5) / 32768.0 : 0.0
-
-    motor3_val = 0.0
-    if numhats > HAT_MOTOR3
-        hat = SDL_JoystickGetHat(js, HAT_MOTOR3)
-        motor3_val = (hat & SDL_HAT_UP) != 0 ? 1.0 : ((hat & SDL_HAT_DOWN) != 0 ? -1.0 : 0.0)
-    end
-
-    motor4_forward = numbuttons > BUTTON_MOTOR4_FORWARD && SDL_JoystickGetButton(js, BUTTON_MOTOR4_FORWARD) != 0
-    motor4_backward = numbuttons > BUTTON_MOTOR4_BACKWARD && SDL_JoystickGetButton(js, BUTTON_MOTOR4_BACKWARD) != 0
-    motor4_val = motor4_forward && !motor4_backward ? 1.0 : (motor4_backward && !motor4_forward ? -1.0 : 0.0)
 
     motor6_close = numbuttons > BUTTON_MOTOR6_CLOSE && SDL_JoystickGetButton(js, BUTTON_MOTOR6_CLOSE) != 0
     motors[6]["invert"] && (motor6_close = !motor6_close)
@@ -248,18 +240,43 @@ function joystick_commands(js, motors)
 
     motors[1]["invert"] && (motor1_val = -motor1_val)
     motors[2]["invert"] && (motor2_val = -motor2_val)
-    motors[3]["invert"] && (motor3_val = -motor3_val)
-    motors[4]["invert"] && (motor4_val = -motor4_val)
     motors[5]["invert"] && (motor5_val = -motor5_val)
 
     return Dict{Int,Int}(
         motors[1]["channel"] => axis_to_angle(motor1_val, motors[1]["min"], motors[1]["max"]),
         motors[2]["channel"] => axis_to_angle(motor2_val, motors[2]["min"], motors[2]["max"]),
-        motors[3]["channel"] => axis_to_angle(motor3_val, motors[3]["min"], motors[3]["max"]),
-        motors[4]["channel"] => axis_to_angle(motor4_val, motors[4]["min"], motors[4]["max"]),
         motors[5]["channel"] => axis_to_angle(motor5_val, motors[5]["min"], motors[5]["max"]),
         motors[6]["channel"] => motor6_angle,
     )
+end
+
+# (motor, direction) for each hat/button pressed since last frame, direction
+# +1/-1 before invert. `prev` holds last frame's hat/buttons.
+function joystick_steps!(js, prev)
+    numbuttons = SDL_JoystickNumButtons(js)
+    hat_y = 0
+    if SDL_JoystickNumHats(js) > HAT_MOTOR3
+        hat = SDL_JoystickGetHat(js, HAT_MOTOR3)
+        hat_y = (hat & SDL_HAT_UP) != 0 ? 1 : ((hat & SDL_HAT_DOWN) != 0 ? -1 : 0)
+    end
+    forward = numbuttons > BUTTON_MOTOR4_FORWARD && SDL_JoystickGetButton(js, BUTTON_MOTOR4_FORWARD) != 0
+    backward = numbuttons > BUTTON_MOTOR4_BACKWARD && SDL_JoystickGetButton(js, BUTTON_MOTOR4_BACKWARD) != 0
+
+    steps = Tuple{Int,Int}[]
+    hat_y != 0 && hat_y != prev[:hat_y] && push!(steps, (3, hat_y))
+    forward && !prev[:forward] && push!(steps, (4, 1))
+    backward && !prev[:backward] && push!(steps, (4, -1))
+    prev[:hat_y], prev[:forward], prev[:backward] = hat_y, forward, backward
+    return steps
+end
+
+# Moves motor n BUTTON_STEP_DEG in direction +1/-1 (before invert), within its limits.
+function step_motor!(fleet_state, motors, n, direction)
+    m = motors[n]
+    m["invert"] && (direction = -direction)
+    lock(fleet_state.lock) do
+        fleet_state.angles[n] = clamp(fleet_state.angles[n] + direction * BUTTON_STEP_DEG, m["min"], m["max"])
+    end
 end
 
 # Shared arm state: fleet_state.angles is the single set of angles every input
@@ -542,6 +559,7 @@ function main()
 
     remote = args[:connect] !== nothing ? start_remote_arm(args[:connect], fleet_state) : nothing
     adopted = remote === nothing  # a client waits for the hub's real angles before its own inputs may write
+    prev_joystick = Dict{Symbol,Any}(:hat_y => 0, :forward => false, :backward => false)
 
     mode_rects = Dict(
         "joystick" => (20, MODE_BUTTON_Y, 122, 34),
@@ -703,6 +721,11 @@ function main()
                 local_commands = nothing  # channel -> angle from this mode's own input, if any
                 if mode == "joystick" && joystick_available
                     local_commands = joystick_commands(js, motors)
+                    for (n, direction) in joystick_steps!(js, prev_joystick)
+                        adopted || continue
+                        angle = step_motor!(fleet_state, motors, n, direction)
+                        remote !== nothing && queue_remote!(remote, Dict{Int,Int}(n => angle))
+                    end
                 elseif mode == "joystick"
                     warn_text = "No joystick connected."
                 elseif mode == "slider"

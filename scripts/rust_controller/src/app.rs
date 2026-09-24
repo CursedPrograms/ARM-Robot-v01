@@ -33,6 +33,7 @@ const HAT_MOTOR3: i32 = 0;
 const BUTTON_MOTOR4_BACKWARD: i32 = 2;
 const BUTTON_MOTOR4_FORWARD: i32 = 3;
 const BUTTON_MOTOR6_CLOSE: i32 = 0;
+const BUTTON_STEP_DEG: i32 = 5; // hat/button motors (3, 4) move this much per press
 const DEADZONE: f64 = 0.05;
 
 #[derive(Default)]
@@ -65,6 +66,10 @@ pub struct App {
     prev_local: BTreeMap<i32, i32>, // last angle each local input produced, by motor number
     remote: Option<RemoteArm>,
     adopted: bool, // a client waits for the hub's real angles before its own inputs may write
+    // last frame's hat/buttons, to step once per press
+    prev_hat_y: i32,
+    prev_forward: bool,
+    prev_backward: bool,
 
     fleet: Option<FleetServer>,
     fleet_error: String,
@@ -157,6 +162,9 @@ impl App {
             last_mode: mode,
             shared,
             prev_local: BTreeMap::new(),
+            prev_hat_y: 0,
+            prev_forward: false,
+            prev_backward: false,
             fleet: None,
             fleet_error: String::new(),
             lan_ip: fleet::local_lan_ip(),
@@ -263,36 +271,59 @@ impl App {
     // Per-frame update (controller.py's main loop body)
     // =====================================================================
 
-    fn joystick_commands(&self) -> BTreeMap<i32, i32> {
+    /// Returns {channel: angle} for the stick motors (1, 2, 5) and the claw (6).
+    /// The hat/button motors (3, 4) step BUTTON_STEP_DEG per press, written
+    /// straight into the shared angles.
+    fn joystick_commands(&mut self) -> BTreeMap<i32, i32> {
         let js = self.joystick.as_ref().expect("checked by caller");
         js.update();
-        let m = &self.motors;
 
         let (mut m1, mut m2, mut m5) = (js.axis(AXIS_MOTOR1), js.axis(AXIS_MOTOR2), js.axis(AXIS_MOTOR5));
-        let mut m3 = js.hat_y(HAT_MOTOR3) as f64;
+        let hat_y = js.hat_y(HAT_MOTOR3);
         let (forward, backward) = (js.button(BUTTON_MOTOR4_FORWARD), js.button(BUTTON_MOTOR4_BACKWARD));
-        let mut m4 = if forward && !backward {
-            1.0
-        } else if backward && !forward {
-            -1.0
-        } else {
-            0.0
-        };
         let mut close = js.button(BUTTON_MOTOR6_CLOSE);
+
+        if self.adopted {
+            if hat_y != 0 && hat_y != self.prev_hat_y {
+                self.step_motor(3, hat_y.signum());
+            }
+            if forward && !self.prev_forward {
+                self.step_motor(4, 1);
+            }
+            if backward && !self.prev_backward {
+                self.step_motor(4, -1);
+            }
+        }
+        (self.prev_hat_y, self.prev_forward, self.prev_backward) = (hat_y, forward, backward);
+
+        let m = &self.motors;
         if m[&6].invert {
             close = !close;
         }
         let inv = |n: i32, v: f64| if m[&n].invert { -v } else { v };
-        (m1, m2, m3, m4, m5) = (inv(1, m1), inv(2, m2), inv(3, m3), inv(4, m4), inv(5, m5));
+        (m1, m2, m5) = (inv(1, m1), inv(2, m2), inv(5, m5));
 
         BTreeMap::from([
             (m[&1].channel, axis_to_angle(m1, m[&1].min, m[&1].max)),
             (m[&2].channel, axis_to_angle(m2, m[&2].min, m[&2].max)),
-            (m[&3].channel, axis_to_angle(m3, m[&3].min, m[&3].max)),
-            (m[&4].channel, axis_to_angle(m4, m[&4].min, m[&4].max)),
             (m[&5].channel, axis_to_angle(m5, m[&5].min, m[&5].max)),
             (m[&6].channel, if close { m[&6].max } else { m[&6].min }),
         ])
+    }
+
+    /// Moves motor n BUTTON_STEP_DEG in direction +1/-1 (before invert), within its limits.
+    fn step_motor(&mut self, n: i32, direction: i32) {
+        let m = &self.motors[&n];
+        let direction = if m.invert { -direction } else { direction };
+        let angle = {
+            let mut s = lock(&self.shared);
+            let angle = (s.angles[&n] + direction * BUTTON_STEP_DEG).clamp(m.min, m.max);
+            s.angles.insert(n, angle);
+            angle
+        };
+        if let Some(remote) = &self.remote {
+            remote.queue(&BTreeMap::from([(n, angle)]));
+        }
     }
 
     fn step(&mut self) {
