@@ -157,7 +157,7 @@
       <table>
         <thead><tr><th>Language</th><th>UI</th><th>Launch</th><th>Platforms</th></tr></thead>
         <tbody>
-          <tr><td>Python</td><td>pygame</td><td><code>controller.bat</code> / <code>controller.sh</code></td><td>Windows, Linux</td></tr>
+          <tr><td>Python</td><td>pygame</td><td><code>run.bat</code> (sets up its venv) / <code>controller.sh</code></td><td>Windows, Linux</td></tr>
           <tr><td>C++</td><td>Win32</td><td><code>build_cpp_controller.bat</code>, then <code>cpp_controller.bat</code></td><td>Windows</td></tr>
           <tr><td>C#</td><td>Avalonia (.NET 8)</td><td><code>csharp_controller.bat</code> / <code>.sh</code></td><td>Windows, Linux</td></tr>
           <tr><td>Go</td><td>Fyne</td><td><code>go_controller.bat</code> / <code>.sh</code></td><td>Windows, Linux</td></tr>
@@ -177,11 +177,15 @@
   <div class="wrap">
     <h2>Fleet</h2>
     <h3 class="title">Join RIFT, or use your phone</h3>
-    <p class="muted">Fleet mode bridges <a href="https://github.com/CursedPrograms/RIFT">RIFT</a>'s HTTP protocol to the Arduino: it serves <code>/status</code>, <code>/cmd?motor=&amp;angle=</code> and <code>/reset</code>, and heartbeats <code>/register</code> so ARM shows up in the dashboard on port <code>5011</code>.</p>
-<pre><span class="p">$</span> pip install -r requirements.txt
-<span class="p">$</span> python scripts/controller.py --list-ports
-<span class="p">$</span> python scripts/controller.py --port COM6 --mode fleet</pre>
-    <p class="muted">The same server hosts a per-motor slider page: open <code>http://&lt;this machine&gt;:5011/</code> on any phone or browser on the network. Add <code>--serve</code> in any mode to keep the phone in sync while you use the desktop window.</p>
+    <p class="muted">Whenever the Python or C++ controller runs, in any mode, it bridges <a href="https://github.com/CursedPrograms/RIFT">RIFT</a>'s HTTP protocol to the Arduino: it serves <code>/status</code>, <code>/cmd?motor=&amp;angle=</code>, <code>/reset</code> and <code>/chirp</code>, and heartbeats <code>/register</code> so ARM shows up in the dashboard on port <code>5011</code> (<code>--no-serve</code> keeps her to yourself). <code>run.bat</code> is the entry point: it sets up its own <code>venv</code> and installs the requirements the first time.</p>
+<pre><span class="p">&gt;</span> run.bat --list-ports
+<span class="p">&gt;</span> run.bat --port COM6 --mode fleet</pre>
+    <p class="muted">The same server hosts a per-motor slider page: open <code>http://&lt;this machine&gt;:5011/</code> on any phone or browser on the network, and it stays in sync with the desktop window.</p>
+    <h3 class="sub">Talking, in Brainfuck</h3>
+    <p class="muted">Every phrase is a <strong>Brainfuck</strong> program that prints its words &mdash; hello is <code>++++++++[&gt;+++++++++++++&lt;-]&gt;.+.</code> &rarr; <code>hi</code> &mdash; and a robot says it by beeping the program on its buzzer, one tone per symbol, in its own voice. <a href="https://cursedprograms.github.io/RIFT/">RIFT</a> runs the conversations and asks each robot to speak with <code>GET /chirp?u=&lt;0-13&gt;</code> (phrases 0&ndash;6, replies 7&ndash;13). ARM&rsquo;s voice is a passive buzzer on <strong>D8</strong> (the other leg to GND), a little lower than the others; the controller passes <code>TALK:&lt;u&gt;</code> to <code>arm.ino</code>.</p>
+
+    <h3 class="sub">Inverse kinematics</h3>
+    <p class="muted">ARM is the YFROBOT / Makerfabs 6-DOF disc-arm frame. Its link lengths in <code>config.json</code> come from the kit&rsquo;s dimension drawing: 72&nbsp;mm from the table to the shoulder pivot, then 104 (upper arm), 143 (forearm) and 173&nbsp;mm (wrist to closed fingertips). IK measures each joint from an optional per-motor <code>kinematicZero</code> &mdash; the raw angle with the base forward, upper arm level and forearm and wrist in line &mdash; and falls back to the rest pose until that&rsquo;s been calibrated.</p>
     <h3 class="sub">Several controllers on one arm</h3>
     <p class="muted">Run one controller as the hub (the one with the Arduino plugged in and <code>--serve</code> on), and connect others with <code>--connect http://&lt;hub&gt;:5011</code>. They mirror the hub's angles ten times a second and send changes back, across languages. Connecting never moves the arm.</p>
     <p class="note"><strong>Sharing a PC with DREAM?</strong> Her sensor board answers <code>WHO</code> with <code>I am Dream</code>, so both projects find their own boards whatever COM numbers Windows hands out. Only one program can hold a serial port, so run one controller per arm.</p>
