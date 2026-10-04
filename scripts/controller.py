@@ -339,7 +339,7 @@ class Button:
         surface.blit(text, text.get_rect(center=self.rect.center))
 
 
-def start_fleet_heartbeat(rift_host, rift_port, interval=FLEET_HEARTBEAT_SECS):
+def start_fleet_heartbeat(rift_host, rift_port, fleet_port=DEFAULT_FLEET_PORT, interval=FLEET_HEARTBEAT_SECS):
     """Background thread that repeatedly POSTs /register to RIFT/NORA. Safe to
     call even if the target isn't reachable yet - it just keeps retrying."""
     import requests
@@ -354,7 +354,8 @@ def start_fleet_heartbeat(rift_host, rift_port, interval=FLEET_HEARTBEAT_SECS):
                     data={
                         "name": FLEET_NAME,
                         "type": FLEET_TYPE,
-                        "capabilities": ",".join(FLEET_CAPABILITIES),
+                        # talk:<port> = RIFT's conversations can /chirp here
+                        "capabilities": ",".join(FLEET_CAPABILITIES + [f"talk:{fleet_port}"]),
                     },
                     timeout=2,
                 )
@@ -388,6 +389,21 @@ def create_fleet_app(motors, fleet_state, fleet_lock, connected):
     @app.route("/ping")
     def ping():
         return f"{FLEET_NAME} alive", 200, {"Content-Type": "text/plain"}
+
+    @app.route("/chirp")
+    def chirp():
+        # RIFT's fleet conversations: /chirp?u=<0-13> says that utterance (a
+        # Brainfuck phrase, see arm/talk_bf.h) on the buzzer. Queued for the
+        # main loop, which owns the serial port (send_talk()).
+        try:
+            u = int(request.args.get("u", ""))
+        except ValueError:
+            u = -1
+        if not 0 <= u <= 13:
+            return jsonify({"ok": False, "error": "use /chirp?u=0-13"}), 400
+        with fleet_lock:
+            fleet_state.setdefault("talk", []).append(u)
+        return jsonify({"ok": True})
 
     @app.route("/status")
     def status():
@@ -453,7 +469,7 @@ def start_fleet_server(args, motors, fleet_state, fleet_lock, connected, fleet_s
 
     if not args.no_register:
         try:
-            start_fleet_heartbeat(args.rift_host, args.rift_port)
+            start_fleet_heartbeat(args.rift_host, args.rift_port, args.fleet_port)
         except ImportError:
             fleet_status["error"] = "requests is not installed (HTTP server running, but no RIFT heartbeat). Install it with: pip install requests"
 
@@ -540,6 +556,15 @@ def send(ser, commands, last_sent):
             ser.write((line + "\n").encode("ascii"))
         return dict(commands)
     return last_sent
+
+
+def send_talk(ser, fleet_state, fleet_lock):
+    """Pass utterances queued by Fleet mode's /chirp to arm.ino ("TALK:<u>")."""
+    with fleet_lock:
+        talk, fleet_state["talk"] = fleet_state.get("talk", []), []
+    if ser is not None:
+        for u in talk:
+            ser.write(f"TALK:{u}\n".encode("ascii"))
 
 
 def round_avatar(path, size):
@@ -812,6 +837,7 @@ def main():
                 while play_index < len(play_steps) and play_steps[play_index]["t"] <= elapsed:
                     commands = {int(ch): ang for ch, ang in play_steps[play_index]["commands"].items()}
                     last_sent = send(ser, commands, last_sent)
+                    send_talk(ser, fleet_state, fleet_lock)
                     changed = {channel_to_motor[ch]: ang for ch, ang in commands.items() if ch in channel_to_motor}
                     with fleet_lock:
                         fleet_state["angles"].update(changed)
@@ -872,6 +898,7 @@ def main():
                     commands = {motors[n]["channel"]: fleet_state["angles"][n] for n in motors}
 
                 last_sent = send(ser, commands, last_sent)
+                send_talk(ser, fleet_state, fleet_lock)
                 if recording:
                     record_steps.append({
                         "t": time.time() - record_start,

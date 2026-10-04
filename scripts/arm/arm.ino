@@ -3,6 +3,16 @@
 
 Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver(0x40);
 
+// Passive buzzer: + to D8, - to GND. Only the fleet's conversations use it.
+#define BUZZER_PIN 8
+
+// ---- TALKING: the fleet's conversations, in Brainfuck ----
+// "TALK:<u>" says utterance u (0-6 phrases, 7-13 replies; see talk_bf.h):
+// a Brainfuck program that prints the words, beeped one tone per symbol.
+// TALK_VOICE_PCT pitches it to ARM's voice (a little lower than the others).
+#include "talk_bf.h"
+const uint8_t TALK_VOICE_PCT = 85;
+
 #define SERVOMIN 120
 #define SERVOMAX 600
 #define NUM_CHANNELS 16
@@ -46,6 +56,7 @@ void setChannel(int channel, float angle) {
 
 void setup() {
   Serial.begin(BAUD_RATE);
+  pinMode(BUZZER_PIN, OUTPUT);
 
   pwm.begin();
   pwm.setPWMFreq(50);
@@ -71,12 +82,17 @@ void loop() {
     line.trim();
     if (line.equalsIgnoreCase("WHO")) {
       Serial.println("I am Arm");  // lets the PC find this board by name
+    } else if (line.startsWith("TALK:")) {
+      // checked before applyCommandLine(), which would read "TALK:3" as motor 0 -> 3
+      talkStart(line.substring(5).toInt());
     } else if (line.length() > 0) {
       applyCommandLine(line);
       lastCommand = millis();
       linked = true;
     }
   }
+
+  talkStep(BUZZER_PIN, TALK_VOICE_PCT);
 
   unsigned long now = millis();
   if (linked && now - lastCommand > LINK_TIMEOUT_MS) {

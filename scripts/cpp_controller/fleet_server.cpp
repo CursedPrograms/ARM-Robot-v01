@@ -204,6 +204,7 @@ std::string FleetServer::start(const MotorMap& motors, FleetState& state,
 
     motors_ = &motors;
     state_ = &state;
+    port_ = port;
     connected_ = std::move(connectedFn);
 
     SOCKET listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -313,6 +314,23 @@ void FleetServer::handleConnection(uintptr_t clientSocketRaw) {
         root.set("connected", Json::makeBool(connected_ ? connected_() : false));
         root.set("motors", std::move(motorsJson));
         sendJson(client, 200, "OK", root);
+    } else if (req.path == "/chirp") {
+        // RIFT's fleet conversations: say utterance u (a Brainfuck phrase,
+        // see arm/talk_bf.h) on the buzzer. Queued for the main loop.
+        auto uIt = req.query.find("u");
+        int u = -1;
+        if (uIt != req.query.end()) {
+            try { u = std::stoi(uIt->second); } catch (const std::exception&) { u = -1; }
+        }
+        if (u < 0 || u > 13) {
+            sendResponse(client, 400, "Bad Request", "application/json", "{\"ok\":false,\"error\":\"use /chirp?u=0-13\"}");
+        } else {
+            {
+                std::lock_guard<std::mutex> lock(state.mutex);
+                state.talk.push_back(u);
+            }
+            sendResponse(client, 200, "OK", "application/json", "{\"ok\":true}");
+        }
     } else if (req.path == "/cmd") {
         auto motorIt = req.query.find("motor");
         auto angleIt = req.query.find("angle");
@@ -392,7 +410,8 @@ void FleetServer::handleConnection(uintptr_t clientSocketRaw) {
 void FleetServer::heartbeatLoop(std::string riftHost, int riftPort) {
     std::string body = std::string("name=") + percentEncode(FLEET_NAME) +
                         "&type=" + percentEncode(FLEET_TYPE) +
-                        "&capabilities=" + percentEncode(FLEET_CAPABILITIES);
+                        "&capabilities=" + percentEncode(std::string(FLEET_CAPABILITIES) +
+                                                        ",talk:" + std::to_string(port_));   // RIFT can /chirp here
 
     while (running_) {
         SOCKET s = connectWithTimeout(riftHost, riftPort, 2000);

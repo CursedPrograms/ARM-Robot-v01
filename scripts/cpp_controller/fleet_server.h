@@ -11,12 +11,14 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "motor_config.h"
 
 struct FleetState {
     std::mutex mutex;
     std::map<int, int> angles; // motor number -> current commanded angle
+    std::vector<int> talk;     // utterances queued by /chirp, sent to arm.ino as TALK:<u>
 };
 
 class FleetServer {
@@ -40,6 +42,7 @@ private:
     const MotorMap* motors_ = nullptr;
     FleetState* state_ = nullptr;
     std::function<bool()> connected_;
+    int port_ = 0;   // advertised to RIFT as talk:<port>
 
     uintptr_t listenSocket_ = 0; // SOCKET, kept as uintptr_t to avoid <winsock2.h> here
     std::thread serverThread_;

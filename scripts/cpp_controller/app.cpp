@@ -243,6 +243,13 @@ std::vector<std::pair<int, int>> joystickSteps(const JoystickState& js, int prev
 
 // Sends when the commands changed, or unchanged every KEEPALIVE_SECS.
 void sendCommands(App& app, const std::map<int, int>& commands) {
+    std::vector<int> talk;   // utterances queued by the fleet server's /chirp
+    {
+        std::lock_guard<std::mutex> lock(app.fleetState.mutex);
+        talk.swap(app.fleetState.talk);
+    }
+    for (int u : talk) app.serial.writeLine("TALK:" + std::to_string(u));
+
     auto now = Clock::now();
     if (commands == app.lastSent && std::chrono::duration<double>(now - app.lastWrite).count() < KEEPALIVE_SECS) return;
     app.lastWrite = now;
