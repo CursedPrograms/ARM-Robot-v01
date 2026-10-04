@@ -285,10 +285,11 @@ This arm can join the [RIFT](https://github.com/CursedPrograms/RIFT) fleet dashb
 
 The same HTTP server also serves a small web control page (`scripts/web/index.html`/`style.css`/`app.js`) at `/` - open `http://<this machine's IP>:5011/` in any browser on the network for a per-motor slider UI, no RIFT required.
 
-```bash
-pip install -r requirements.txt
-python scripts/controller.py --list-ports              # find the Arduino's port
-python scripts/controller.py --port COM6 --mode fleet
+`run.bat` is the entry point: the first time it creates `venv\` and installs `requirements.txt` (again only when that file changes), then starts the controller with whatever arguments you give it. `controller.bat` and `fleet_server.bat` go through it too.
+
+```bat
+run.bat --list-ports              :: find the Arduino's port
+run.bat --port COM6 --mode fleet
 ```
 
 ### Live sync between the desktop window and the web page

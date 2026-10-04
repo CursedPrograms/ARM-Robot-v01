@@ -55,3 +55,4 @@ scripts/csharp_controller/obj/
 scripts/rust_controller/target/
 
 TODO.txt
+venv/
