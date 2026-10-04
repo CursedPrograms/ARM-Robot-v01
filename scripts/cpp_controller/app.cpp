@@ -261,6 +261,16 @@ HWND makeStatic(HWND parent, int x, int y, int w, int h, const char* text = "") 
                             x, y, w, h, parent, nullptr, GetModuleHandle(nullptr), nullptr);
 }
 
+// ARM's avatar (icon resource 1, controller.rc) as a size x size picture. The
+// one place the avatar is loaded: swap the icon for animation frames here later.
+HWND makeAvatar(HWND parent, int x, int y, int size) {
+    HWND pic = CreateWindowExA(0, "STATIC", "", WS_CHILD | WS_VISIBLE | SS_ICON | SS_REALSIZECONTROL,
+                               x, y, size, size, parent, nullptr, GetModuleHandle(nullptr), nullptr);
+    HANDLE icon = LoadImageA(GetModuleHandle(nullptr), MAKEINTRESOURCEA(1), IMAGE_ICON, size, size, LR_DEFAULTCOLOR);
+    if (icon) SendMessageA(pic, STM_SETICON, reinterpret_cast<WPARAM>(icon), 0);
+    return pic;
+}
+
 HWND makeButton(HWND parent, int id, int x, int y, int w, int h, const char* text) {
     return CreateWindowExA(0, "BUTTON", text, WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
                             x, y, w, h, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
@@ -697,7 +707,8 @@ void createControls(App& app) {
     HWND hwnd = app.hwnd;
 
     app.staticHeading = makeStatic(hwnd, 20, 8, 300, 22, "Arm Controller (C++)");
-    app.staticStatus = makeStatic(hwnd, 20, 32, 540, 18, app.status.c_str());
+    app.staticStatus = makeStatic(hwnd, 20, 32, 480, 18, app.status.c_str());
+    makeAvatar(hwnd, WINDOW_WIDTH - 20 - 44, 6, 44);
 
     const char* names[4] = {"Joystick", "Sliders", "IK", "Fleet"};
     int ids[4] = {ID_MODE_JOYSTICK, ID_MODE_SLIDER, ID_MODE_IK, ID_MODE_FLEET};

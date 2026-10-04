@@ -492,6 +492,21 @@ def send(ser, commands, last_sent):
     return last_sent
 
 
+def round_avatar(path, size):
+    """The robot's avatar as a circular surface, or None if it can't be loaded.
+    The one place the avatar is loaded: swap in animation frames here later."""
+    try:
+        img = pygame.transform.smoothscale(pygame.image.load(path).convert(), (size, size))
+    except (pygame.error, OSError):
+        return None
+    mask = pygame.Surface((size, size), pygame.SRCALPHA)
+    pygame.draw.circle(mask, (255, 255, 255, 255), (size // 2, size // 2), size // 2)
+    out = pygame.Surface((size, size), pygame.SRCALPHA)
+    out.blit(img, (0, 0))
+    out.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description="Unified joystick/slider/IK arm controller with macro recording, over USB serial.")
     parser.add_argument("--device", type=int, default=0, help="Joystick index to use (default 0)")
@@ -555,6 +570,7 @@ def main():
     pygame.key.set_repeat(KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS)
     font = pygame.font.SysFont(None, 24)
     small_font = pygame.font.SysFont(None, 18)
+    avatar = round_avatar(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "images", "arm_avatar.jpg"), 44)
     clock = pygame.time.Clock()
 
     mode = args.mode or ("joystick" if js else "slider")
@@ -818,6 +834,8 @@ def main():
             # ---- draw ----
             screen.fill(BG_COLOR)
             screen.blit(font.render("Arm Controller", True, TEXT_COLOR), (20, 16))
+            if avatar:
+                screen.blit(avatar, (WINDOW_WIDTH - 20 - 44, 6))
             screen.blit(small_font.render(status, True, STATUS_COLOR), (20, 40))
 
             for name, btn in mode_buttons.items():

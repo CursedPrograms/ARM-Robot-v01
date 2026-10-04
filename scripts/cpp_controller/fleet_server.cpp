@@ -85,6 +85,8 @@ std::string contentTypeFor(const std::string& path) {
     if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".css") == 0) return "text/css; charset=utf-8";
     if (path.size() >= 3 && path.compare(path.size() - 3, 3, ".js") == 0) return "application/javascript; charset=utf-8";
     if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".xml") == 0) return "application/xml; charset=utf-8";
+    if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".jpg") == 0) return "image/jpeg";
+    if (path.size() >= 4 && path.compare(path.size() - 4, 4, ".ico") == 0) return "image/x-icon";
     return "application/octet-stream";
 }
 
@@ -288,7 +290,7 @@ void FleetServer::handleConnection(uintptr_t clientSocketRaw) {
 
     if (req.path == "/") {
         sendFile(client, repoRoot() + "\\scripts\\web\\index.html", "/index.html");
-    } else if (req.path == "/style.css" || req.path == "/app.js") {
+    } else if (req.path == "/style.css" || req.path == "/app.js" || req.path == "/avatar.jpg" || req.path == "/favicon.ico") {
         sendFile(client, repoRoot() + "\\scripts\\web" + req.path, req.path);
     } else if (req.path == "/colour_scheme.xml") {
         sendFile(client, repoRoot() + "\\colour_scheme.xml", req.path);

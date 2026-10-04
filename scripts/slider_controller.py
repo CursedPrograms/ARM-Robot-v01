@@ -132,6 +132,21 @@ class Slider:
         surface.blit(value_surf, (SLIDER_X + SLIDER_WIDTH + 20, self.y - 10))
 
 
+def round_avatar(path, size):
+    """The robot's avatar as a circular surface, or None if it can't be loaded.
+    The one place the avatar is loaded: swap in animation frames here later."""
+    try:
+        img = pygame.transform.smoothscale(pygame.image.load(path).convert(), (size, size))
+    except (pygame.error, OSError):
+        return None
+    mask = pygame.Surface((size, size), pygame.SRCALPHA)
+    pygame.draw.circle(mask, (255, 255, 255, 255), (size // 2, size // 2), size // 2)
+    out = pygame.Surface((size, size), pygame.SRCALPHA)
+    out.blit(img, (0, 0))
+    out.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description="Slider GUI -> Arduino motor controller over USB serial (no joystick).")
     parser.add_argument("--port", type=str, default=None, help="Serial port, e.g. COM6 (auto-detected if omitted)")
@@ -168,6 +183,7 @@ def main():
         pass
     font = pygame.font.SysFont(None, 26)
     small_font = pygame.font.SysFont(None, 20)
+    avatar = round_avatar(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "images", "arm_avatar.jpg"), 44)
     clock = pygame.time.Clock()
 
     motors = load_motor_config()
@@ -205,6 +221,8 @@ def main():
             screen.blit(title_surf, (20, 20))
             status_surf = small_font.render(status, True, STATUS_COLOR)
             screen.blit(status_surf, (20, 46))
+            if avatar:
+                screen.blit(avatar, (WINDOW_WIDTH - 20 - 44, 10))
 
             for slider in sliders:
                 slider.draw(screen, font)

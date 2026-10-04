@@ -161,6 +161,37 @@ def inverse_kinematics(motors, geometry, x, y, z, pitch_deg=0.0, elbow_down=Fals
     return {1: base_raw, 2: shoulder_raw, 3: elbow_raw, 4: wrist_raw}
 
 
+def print_avatar(size=16):
+    """Print ARM's avatar in the terminal as truecolor half-blocks (two pixels
+    per character). The one place the avatar is loaded: swap in animation
+    frames here later. Skipped when output isn't a terminal or pygame is missing."""
+    if not sys.stdout.isatty():
+        return
+    try:
+        import os
+        os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
+        import pygame
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "images", "arm_avatar.jpg")
+        img = pygame.transform.smoothscale(pygame.image.load(path), (size, size))
+    except Exception:
+        return
+    lines = []
+    for y in range(0, size, 2):
+        row = []
+        for x in range(size):
+            t, b = img.get_at((x, y)), img.get_at((x, y + 1))
+            row.append(f"\x1b[38;2;{t.r};{t.g};{t.b}m\x1b[48;2;{b.r};{b.g};{b.b}m▀")
+        lines.append("  " + "".join(row) + "\x1b[0m")
+    text = "\n".join(lines) + "\n"
+    try:
+        text.encode(sys.stdout.encoding or "ascii")
+    except (UnicodeEncodeError, LookupError):
+        return   # console can't show the block character
+    if os.name == "nt":
+        os.system("")   # turn on ANSI colours in the Windows console
+    print(text)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Inverse/forward kinematics controller for the arm, over USB serial.")
     parser.add_argument("--port", type=str, default=None, help="Serial port, e.g. COM6 (auto-detected if omitted)")
@@ -184,6 +215,9 @@ def main():
 
     parser.add_argument("--dry-run", action="store_true", help="Compute and print only, don't open serial or send anything")
     args = parser.parse_args()
+
+    if not args.list_ports:
+        print_avatar()
 
     if args.list_ports:
         list_serial_ports()
