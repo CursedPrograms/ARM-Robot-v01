@@ -6,7 +6,8 @@ if not exist build mkdir build
 where g++ >nul 2>nul
 if %errorlevel%==0 (
     echo Building with g++...
-    g++ -std=c++17 -O2 -o build\controller.exe app.cpp motor_config.cpp kinematics.cpp serial_port.cpp joystick.cpp macros.cpp fleet_server.cpp remote_arm.cpp -lws2_32 -lsetupapi -lwinmm -lcomctl32
+    windres controller.rc -O coff -o build\controller_res.o
+    g++ -std=c++17 -O2 -o build\controller.exe build\controller_res.o app.cpp motor_config.cpp kinematics.cpp serial_port.cpp joystick.cpp macros.cpp fleet_server.cpp remote_arm.cpp colour_scheme.cpp -lws2_32 -lsetupapi -lwinmm -lcomctl32 -lgdi32
     if %errorlevel%==0 (
         echo.
         echo Built scripts\cpp_controller\build\controller.exe - run it with cpp_controller.bat

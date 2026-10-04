@@ -18,6 +18,7 @@ add_executable(controller
     macros.cpp
     fleet_server.cpp
     remote_arm.cpp
+    controller.rc
 )
 
-target_link_libraries(controller PRIVATE ws2_32 setupapi winmm comctl32)
+target_link_libraries(controller PRIVATE ws2_32 setupapi winmm comctl32 gdi32)

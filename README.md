@@ -19,6 +19,11 @@
 
 - Robot Type: 6 DOF Arm
 
+<div align="center">
+  <img src="images/arm_avatar.jpg" alt="ARM avatar: a human representation of the robot" width="320"/>
+  <p><i>ARM</i></p>
+</div>
+
 ---
 
 ### Software
@@ -37,8 +42,34 @@
 
 ---
 
-PCA9685 Servo Motor 16 Channel Driver
-Arduino Uno
+## Hardware
+
+| **Component** | **Details** |
+|---|---|
+| Microcontroller | Arduino Uno (`scripts/arm/arm.ino`, 115200 baud) |
+| Servo driver | PCA9685 16-channel PWM driver, I2C address `0x40`, 50 Hz |
+| Servos | 6× 270° servos (claw limited to 40–145°) |
+| Servo power | External 5–6 V supply to the PCA9685's V+ terminal (not the Uno's 5 V pin) |
+| Controllers | USB joystick, keyboard, phone / browser, RIFT |
+
+### Pinout
+
+| Signal | Connection |
+|---|---|
+| PCA9685 SDA / SCL | Uno A4 / A5 |
+| PCA9685 VCC / GND | Uno 5 V / GND |
+| PCA9685 V+ | External servo supply (share GND with the Uno) |
+| Motor 1 base | PCA9685 channel 0 |
+| Motor 2 shoulder | channel 1 |
+| Motor 3 elbow | channel 2 |
+| Motor 4 wrist pitch | channel 3 |
+| Motor 5 wrist roll | channel 4 |
+| Motor 6 claw | channel 5 |
+
+Channels, limits, rest angles and directions live in `config.json`.
+
+> [!NOTE]
+> The arm's link lengths in `config.json` (`geometry`) are still unmeasured placeholders, so IK mode can't be accurate yet. Measure them in millimetres and fill them in.
 
 ---
 
@@ -289,6 +320,18 @@ python scripts/controller.py --connect http://192.168.0.10:5011
 Per-motor servo channel, angle range, resting angle, and invert flag all come from `config.json` (see `scripts/motor_config.py`) - the same config `slider_controller.py` uses. `.bat` launchers (`controller.bat`, `slider_controller.bat`, `fleet_server.bat`, `run_joystick_test.bat`, `build_cpp_controller.bat`, `cpp_controller.bat`, `julia_controller.bat`, `csharp_controller.bat`/`.sh`) live at the repo root alongside `config.json`; the Python, C++, Julia, and C# sources themselves stay under `scripts/`.
 
 ---
+
+---
+
+## Screenshots
+
+<div align="center">
+  <img src="images/screenshots/controller-python.png" alt="Python controller" width="260"/>
+  <img src="images/screenshots/controller-cpp.png" alt="C++ controller" width="420"/>
+  <img src="images/screenshots/web-control.png" alt="Web control page" width="420"/>
+</div>
+
+<p align="center"><i>Python controller, C++ controller, Web control page. Captured without the arm plugged in, so the controllers are in display-only mode at the rest pose.</i></p>
 
 ---
 

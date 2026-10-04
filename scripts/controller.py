@@ -50,6 +50,7 @@ Usage:
     python controller.py --port COM6 --mode fleet --fleet-port 5011
 """
 
+import os
 import argparse
 import json
 import socket
@@ -547,6 +548,10 @@ def main():
 
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     pygame.display.set_caption("Arm Controller")
+    try:  # window icon: the robot's avatar
+        pygame.display.set_icon(pygame.image.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "images", "arm-icon.png")))
+    except (pygame.error, OSError):
+        pass
     pygame.key.set_repeat(KEY_REPEAT_DELAY_MS, KEY_REPEAT_INTERVAL_MS)
     font = pygame.font.SysFont(None, 24)
     small_font = pygame.font.SysFont(None, 18)

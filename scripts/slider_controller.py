@@ -21,6 +21,7 @@ Usage:
     python slider_controller.py --port COM6
 """
 
+import os
 import argparse
 import sys
 import time
@@ -161,6 +162,10 @@ def main():
     pygame.init()
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     pygame.display.set_caption("Motor Sliders")
+    try:  # window icon: the robot's avatar
+        pygame.display.set_icon(pygame.image.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "images", "arm-icon.png")))
+    except (pygame.error, OSError):
+        pass
     font = pygame.font.SysFont(None, 26)
     small_font = pygame.font.SysFont(None, 20)
     clock = pygame.time.Clock()

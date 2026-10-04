@@ -841,6 +841,7 @@ int main(int argc, char** argv) {
     wc.lpfnWndProc = WindowProc;
     wc.hInstance = GetModuleHandle(nullptr);
     wc.lpszClassName = "ArmControllerWindowCpp";
+    wc.hIcon = LoadIconA(GetModuleHandle(nullptr), MAKEINTRESOURCEA(1));  // controller.rc: ARM's avatar
     wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
     wc.hbrBackground = backgroundBrush();
     RegisterClassA(&wc);

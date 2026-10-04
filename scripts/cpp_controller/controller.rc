@@ -1,0 +1,2 @@
+// Window / exe icon: ARM's avatar (images/arm.ico). Built by build_cpp_controller.bat and CMake.
+1 ICON "../../images/arm.ico"

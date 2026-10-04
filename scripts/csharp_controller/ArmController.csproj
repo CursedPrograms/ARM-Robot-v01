@@ -3,6 +3,7 @@
   <PropertyGroup>
     <!-- Exe (not WinExe) on purpose: like the other controllers, this prints status/errors to the console alongside the GUI window. -->
     <OutputType>Exe</OutputType>
+    <ApplicationIcon>..\..\images\arm.ico</ApplicationIcon>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>

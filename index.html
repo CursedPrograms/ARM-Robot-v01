@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARM — 6-DOF Robot Arm</title>
+<meta name="description" content="ARM is a 6-DOF robot arm from the DREAM Robotics ecosystem, driven by an Arduino and a PCA9685, with joystick, keyboard, slider, IK and web control, macros, and controllers in Python, C++, C#, Go, Rust and Julia.">
+<meta name="color-scheme" content="dark">
+<meta property="og:title" content="ARM — 6-DOF Robot Arm">
+<meta property="og:description" content="A 6-DOF robot arm with joystick, web and fleet control and controllers in six languages.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="images/arm_avatar.jpg">
+<link rel="icon" href="site/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="site/apple-touch-icon.png">
+<link rel="stylesheet" href="site/style.css">
+<script src="site/site.js" defer></script>
+</head>
+<body>
+
+<nav aria-label="Primary">
+  <div class="wrap">
+    <a class="brand" href="#top">ARM</a>
+    <ul>
+      <li><a href="#overview">Overview</a></li>
+      <li><a href="#controls">Controls</a></li>
+      <li><a href="#controllers">Controllers</a></li>
+      <li><a href="#fleet">Fleet</a></li>
+      <li><a href="#screens">Screens</a></li>
+      <li><a href="https://github.com/CursedPrograms/ARM-Robot-v01">GitHub</a></li>
+    </ul>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <div class="eyebrow">A DREAM Robotics Agent &middot; 6-DOF Arm</div>
+    <h1>ARM</h1>
+    <p class="tagline">6-DOF Robot Arm</p>
+    <p class="lede">Six servos on a PCA9685, driven by an Arduino Uno. Steer her with a joystick, the keyboard, sliders, inverse kinematics or your phone, record macros, and join the RIFT fleet. Every controller shares one set of angles, so they all move together.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/CursedPrograms/ARM-Robot-v01">View on GitHub</a>
+      <a class="btn" href="#controls">Controls</a>
+      <a class="btn" href="https://ko-fi.com/cursedentertainment">Support on Ko-fi</a>
+    </div>
+    <div class="tags" aria-label="Technologies">
+      <span class="tag">Python</span>
+      <span class="tag">C++</span>
+      <span class="tag">C#</span>
+      <span class="tag">Go</span>
+      <span class="tag">Rust</span>
+      <span class="tag">Julia</span>
+      <span class="tag">Arduino</span>
+      <span class="tag">MIT License</span>
+    </div>
+    <figure class="avatar">
+      <img src="images/arm_avatar.jpg" alt="ARM's avatar: a human representation of the robot" width="768" height="768">
+      <figcaption>ARM &middot; avatar</figcaption>
+    </figure>
+  </div>
+</header>
+
+<main>
+
+<section id="overview">
+  <div class="wrap">
+    <h2>Overview</h2>
+    <h3 class="title">Six joints, one shared state</h3>
+    <div class="grid cols-3">
+      <div class="card">
+        <span class="k">Modes</span>
+        <h4>Four ways to steer</h4>
+        <p>Joystick, sliders, inverse kinematics (IK) and Fleet mode, in every controller.</p>
+      </div>
+      <div class="card">
+        <span class="k">Macros</span>
+        <h4>Record &amp; replay</h4>
+        <p>Record a sequence of moves, save it to <code>scripts/macros/*.json</code> and replay it from any controller.</p>
+      </div>
+      <div class="card">
+        <span class="k">Sync</span>
+        <h4>Live everywhere</h4>
+        <p>The desktop window, the phone page and RIFT all read and write the same angles. Last writer wins.</p>
+      </div>
+      <div class="card">
+        <span class="k">Safe</span>
+        <h4>Rest pose</h4>
+        <p>On start-up, on Home, and whenever no controller has been heard from for 2&nbsp;s, she eases back to rest.</p>
+      </div>
+      <div class="card">
+        <span class="k">Find</span>
+        <h4>No COM ports to set</h4>
+        <p><code>arm.ino</code> answers <code>WHO</code> with <code>I am Arm</code>, so controllers find her on any port.</p>
+      </div>
+      <div class="card">
+        <span class="k">Theme</span>
+        <h4>One colour file</h4>
+        <p>Every UI takes its colours from <code>colour_scheme.xml</code>. Edit it and restart, with no rebuild.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="controls">
+  <div class="wrap">
+    <h2>Controls</h2>
+    <h3 class="title">Joystick, keyboard or phone</h3>
+    <h3 class="sub">Rest pose</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Motor</th><th>1 base</th><th>2 shoulder</th><th>3 elbow</th><th>4 wrist pitch</th><th>5 wrist roll</th><th>6 claw</th></tr></thead>
+        <tbody>
+          <tr><td>Rest angle</td><td>135</td><td>55</td><td>100</td><td>230</td><td>135</td><td>40 (open)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted spaced">Change it in two places: <code>rest</code> in <code>config.json</code> for the controllers, and <code>REST_ANGLE</code> in <code>scripts/arm/arm.ino</code> (reflash afterwards).</p>
+    <h3 class="sub">Joystick</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Input</th><th>Motor</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td>Stick left / right</td><td>1 base</td><td>Follows the stick, centred = rest</td></tr>
+          <tr><td>Stick forward / back</td><td>2 shoulder</td><td>Follows the stick, centred = rest</td></tr>
+          <tr><td>Twist</td><td>5 wrist roll</td><td>Follows the stick, centred = rest</td></tr>
+          <tr><td>Hat up / down</td><td>3 elbow</td><td>5&deg; per press</td></tr>
+          <tr><td>Button 3 / button 2</td><td>4 wrist pitch</td><td>5&deg; per press</td></tr>
+          <tr><td>Trigger</td><td>6 claw</td><td>Held = closed, released = open</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <h3 class="sub">Keyboard</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Keys</th><th>Motor</th><th>Per press</th></tr></thead>
+        <tbody>
+          <tr><td><kbd>A</kbd> / <kbd>D</kbd></td><td>1 base</td><td>&minus;5&deg; / +5&deg;</td></tr>
+          <tr><td><kbd>W</kbd> / <kbd>S</kbd></td><td>2 shoulder</td><td>Up / down 5&deg;</td></tr>
+          <tr><td><kbd>R</kbd> / <kbd>F</kbd></td><td>3 elbow</td><td>Up / down 5&deg;</td></tr>
+          <tr><td><kbd>T</kbd> / <kbd>G</kbd></td><td>4 wrist pitch</td><td>Up / down 5&deg;</td></tr>
+          <tr><td><kbd>Q</kbd> / <kbd>E</kbd></td><td>5 wrist roll</td><td>&minus;5&deg; / +5&deg;</td></tr>
+          <tr><td><kbd>Space</kbd></td><td>6 claw</td><td>Held = closed, released = open</td></tr>
+          <tr><td><kbd>Shift</kbd> + any of the above</td><td></td><td>1&deg; steps for fine positioning</td></tr>
+          <tr><td><kbd>Home</kbd> / <kbd>1</kbd>&ndash;<kbd>9</kbd> / <kbd>Esc</kbd></td><td></td><td>Rest pose / pick a macro / quit</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note"><strong>Keyboard control</strong> is in the Python controller (<code>controller.py</code>) so far. Every motor stays inside its <code>min</code>/<code>max</code> from <code>config.json</code>, and <code>invert</code> flips its direction.</p>
+  </div>
+</section>
+
+<section id="controllers">
+  <div class="wrap">
+    <h2>Controllers</h2>
+    <h3 class="title">Same arm, your language</h3>
+    <p class="muted">Every controller has the same four modes and macros, and reads the same <code>config.json</code>. Launchers live at the repo root.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Language</th><th>UI</th><th>Launch</th><th>Platforms</th></tr></thead>
+        <tbody>
+          <tr><td>Python</td><td>pygame</td><td><code>controller.bat</code> / <code>controller.sh</code></td><td>Windows, Linux</td></tr>
+          <tr><td>C++</td><td>Win32</td><td><code>build_cpp_controller.bat</code>, then <code>cpp_controller.bat</code></td><td>Windows</td></tr>
+          <tr><td>C#</td><td>Avalonia (.NET 8)</td><td><code>csharp_controller.bat</code> / <code>.sh</code></td><td>Windows, Linux</td></tr>
+          <tr><td>Go</td><td>Fyne</td><td><code>go_controller.bat</code> / <code>.sh</code></td><td>Windows, Linux</td></tr>
+          <tr><td>Rust</td><td>egui</td><td><code>rust_controller.bat</code> / <code>.sh</code></td><td>Windows, Linux</td></tr>
+          <tr><td>Julia</td><td>SDL2</td><td><code>julia_controller.bat</code> / <code>.sh</code></td><td>Windows, Linux</td></tr>
+        </tbody>
+      </table>
+    </div>
+<pre><span class="p">&gt;</span> cpp_controller.bat --list-ports              <span class="c"># see what's connected</span>
+<span class="p">&gt;</span> cpp_controller.bat --port COM6 --serve        <span class="c"># drive her and share the angles</span>
+<span class="p">$</span> python scripts/controller.py --connect http://192.168.0.10:5011   <span class="c"># a second window</span></pre>
+    <p class="muted">Leave out <code>--port</code> and the controller asks each port <code>WHO</code> and uses the one that answers <code>I am Arm</code>. That takes about 3&nbsp;s, so <code>--port</code> is faster if you know it. Joystick support in Rust and Go needs the SDL2 shared library.</p>
+  </div>
+</section>
+
+<section id="fleet">
+  <div class="wrap">
+    <h2>Fleet</h2>
+    <h3 class="title">Join RIFT, or use your phone</h3>
+    <p class="muted">Fleet mode bridges <a href="https://github.com/CursedPrograms/RIFT">RIFT</a>'s HTTP protocol to the Arduino: it serves <code>/status</code>, <code>/cmd?motor=&amp;angle=</code> and <code>/reset</code>, and heartbeats <code>/register</code> so ARM shows up in the dashboard on port <code>5011</code>.</p>
+<pre><span class="p">$</span> pip install -r requirements.txt
+<span class="p">$</span> python scripts/controller.py --list-ports
+<span class="p">$</span> python scripts/controller.py --port COM6 --mode fleet</pre>
+    <p class="muted">The same server hosts a per-motor slider page: open <code>http://&lt;this machine&gt;:5011/</code> on any phone or browser on the network. Add <code>--serve</code> in any mode to keep the phone in sync while you use the desktop window.</p>
+    <h3 class="sub">Several controllers on one arm</h3>
+    <p class="muted">Run one controller as the hub (the one with the Arduino plugged in and <code>--serve</code> on), and connect others with <code>--connect http://&lt;hub&gt;:5011</code>. They mirror the hub's angles ten times a second and send changes back, across languages. Connecting never moves the arm.</p>
+    <p class="note"><strong>Sharing a PC with DREAM?</strong> Her sensor board answers <code>WHO</code> with <code>I am Dream</code>, so both projects find their own boards whatever COM numbers Windows hands out. Only one program can hold a serial port, so run one controller per arm.</p>
+  </div>
+</section>
+
+<section id="screens">
+  <div class="wrap">
+    <h2>Screens</h2>
+    <h3 class="title">The controllers</h3>
+    <p class="muted">Captured without the arm plugged in, so the controllers are in display-only mode at the rest pose.</p>
+    <div class="screens">
+      <figure class="shot">
+        <img src="images/screenshots/controller-python.png" alt="ARM's Python controller with motor sliders and macros" width="562" height="712" loading="lazy">
+        <figcaption>Python controller (pygame)</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="images/screenshots/controller-cpp.png" alt="ARM's C++ controller with motor sliders and macros" width="582" height="727" loading="lazy">
+        <figcaption>C++ controller (Win32)</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="images/screenshots/web-control.png" alt="ARM's web control page with a slider per motor" width="900" height="900" loading="lazy">
+        <figcaption>Web control page</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section id="related">
+  <div class="wrap">
+    <h2>DREAM Robotics</h2>
+    <h3 class="title">The rest of the family</h3>
+    <div class="related">
+      <a href="https://github.com/CursedPrograms/MILA-Robot-v00">MILA-Robot-v00</a>
+      <a href="https://github.com/CursedPrograms/IDA-Robot-v00">IDA-Robot-v00</a>
+      <a href="https://github.com/CursedPrograms/KIDA-Robot-v00">KIDA-Robot-v00</a>
+      <a href="https://github.com/CursedPrograms/KIDA-Robot-v01">KIDA-Robot-v01</a>
+      <a href="https://github.com/CursedPrograms/NORA-Robot-v00">NORA-Robot-v00</a>
+      <a href="https://github.com/CursedPrograms/WHIP-Robot-v00">WHIP-Robot-v00</a>
+      <a href="https://github.com/CursedPrograms/RIFT">RIFT</a>
+      <a href="https://github.com/CursedPrograms/DREAM">DREAM</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="links">
+      <a href="https://github.com/CursedPrograms/ARM-Robot-v01">GitHub</a>
+      <a href="https://x.com/NorowaretaGemu">X: @NorowaretaGemu</a>
+      <a href="https://cursed-entertainment.itch.io/">itch.io</a>
+      <a href="https://ko-fi.com/cursedentertainment">Ko-fi</a>
+      <a href="https://github.com/CursedPrograms/ARM-Robot-v01/blob/main/LICENSE">MIT License</a>
+    </div>
+
+    <div class="logos">
+      <a href="https://ko-fi.com/cursedentertainment">
+        <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="Support Cursed Entertainment on Ko-fi" width="180" loading="lazy">
+      </a>
+      <a href="https://cursed-entertainment.itch.io/">
+        <img src="https://github.com/CursedPrograms/cursedentertainment/raw/main/images/logos/logo-wide-grey.png" alt="Cursed Entertainment" width="250" loading="lazy">
+      </a>
+      <a href="https://github.com/SynthWomb">
+        <img src="https://github.com/SynthWomb/synth.womb/blob/main/logos/synthwomb07.png?raw=true" alt="SynthWomb" width="200" loading="lazy">
+      </a>
+    </div>
+
+    <div>&copy; Cursed Entertainment 2026</div>
+  </div>
+</footer>
+
+</body>
+</html>
