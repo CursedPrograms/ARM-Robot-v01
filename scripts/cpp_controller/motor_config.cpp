@@ -99,6 +99,7 @@ MotorMap loadMotorConfig() {
         if (const Json* v = overrides.find("rest")) m.rest = v->asInt(m.rest);
         if (const Json* v = overrides.find("invert")) m.invert = v->asBool(m.invert);
         if (const Json* v = overrides.find("kinematicSign")) m.kinematicSign = v->asInt(m.kinematicSign);
+        if (const Json* v = overrides.find("kinematicZero")) m.kinematicZero = v->asInt(m.kinematicZero);
     }
 
     return motors;

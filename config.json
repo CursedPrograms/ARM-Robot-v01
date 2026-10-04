@@ -8,11 +8,11 @@
         "6": { "channel": 5, "min": 40, "max": 145, "rest": 40,  "invert": false, "kinematicSign": 1 }
     },
     "geometry": {
-        "_comment": "All lengths unmeasured placeholders (mm) - fill in, then IK_controller.py will work. kinematicSign per motor (1 or -1) says whether increasing raw servo angle increases the physical joint angle relative to that motor's 'rest' position.",
+        "_comment": "Lengths (mm) measured off the kit maker's dimension drawing (YFROBOT 6-DOF disc arm spec sheet, same frame as Makerfabs PICO arm): about +-3 mm - check with a tape measure. kinematicZero per motor (raw angle with base forward, upper arm level, forearm and wrist in line) is still to be calibrated; until then IK uses 'rest'. kinematicSign (1 or -1): does a bigger raw angle bend the joint up (+1) or down (-1)?",
         "units": "mm",
-        "baseHeight": 0,
-        "upperArmLength": 121,
-        "forearmLength": 162,
-        "wristLength": 189
+        "baseHeight": 72,
+        "upperArmLength": 104,
+        "forearmLength": 143,
+        "wristLength": 173
     }
 }

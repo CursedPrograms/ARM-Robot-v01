@@ -9,18 +9,22 @@ constexpr double PI = 3.14159265358979323846;
 double toRad(double deg) { return deg * PI / 180.0; }
 double toDeg(double rad) { return rad * 180.0 / PI; }
 
+// Raw angle where the joint is at 0 deg: config.json's kinematicZero once
+// calibrated, else the resting angle (the old behaviour).
+double kinematicZero(const Motor& m) { return m.kinematicZero >= 0 ? m.kinematicZero : m.rest; }
+
 // Convert a motor's raw servo angle to a kinematic joint angle (degrees),
-// relative to its configured resting position.
+// relative to its kinematic zero.
 double rawToDeg(const MotorMap& motors, int n, double rawAngle) {
     const Motor& m = motors.at(n);
-    return (rawAngle - m.rest) * m.kinematicSign;
+    return (rawAngle - kinematicZero(m)) * m.kinematicSign;
 }
 
 // Convert a kinematic joint angle (degrees) to a motor's raw servo angle,
 // clamped to its configured range. Returns whether it fit before clamping.
 int degToRaw(const MotorMap& motors, int n, double jointDeg, bool& inRange) {
     const Motor& m = motors.at(n);
-    double raw = m.rest + jointDeg * m.kinematicSign;
+    double raw = kinematicZero(m) + jointDeg * m.kinematicSign;
     double clamped = std::max<double>(m.min, std::min<double>(m.max, raw));
     inRange = (raw >= m.min && raw <= m.max);
     return static_cast<int>(std::lround(clamped));

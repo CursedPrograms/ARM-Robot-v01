@@ -85,18 +85,25 @@ def check_geometry(geometry):
     return True
 
 
+def kinematic_zero(m):
+    """Raw servo angle where this joint is at 0 degrees: base forward, upper
+    arm level, forearm and wrist in line. config.json's "kinematicZero" once
+    it's been calibrated, else the resting angle (the old behaviour)."""
+    return m.get("kinematicZero", m["rest"])
+
+
 def raw_to_deg(motors, n, raw_angle):
     """Convert a motor's raw servo angle to a kinematic joint angle (degrees),
-    relative to its configured resting position."""
+    relative to its kinematic zero."""
     m = motors[n]
-    return (raw_angle - m["rest"]) * m["kinematicSign"]
+    return (raw_angle - kinematic_zero(m)) * m["kinematicSign"]
 
 
 def deg_to_raw(motors, n, joint_deg):
     """Convert a kinematic joint angle (degrees) to a motor's raw servo angle,
     clamped to its configured range. Returns (raw_angle, in_range)."""
     m = motors[n]
-    raw = m["rest"] + joint_deg * m["kinematicSign"]
+    raw = kinematic_zero(m) + joint_deg * m["kinematicSign"]
     clamped = max(m["min"], min(m["max"], raw))
     return int(round(clamped)), (m["min"] <= raw <= m["max"])
 

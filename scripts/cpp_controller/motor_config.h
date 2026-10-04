@@ -14,6 +14,9 @@ struct Motor {
     int rest = 135;
     bool invert = false;
     int kinematicSign = 1;
+    // Raw angle where the joint is at 0 deg (base forward, upper arm level,
+    // forearm and wrist in line). -1 = not calibrated: kinematics uses rest.
+    int kinematicZero = -1;
 };
 
 struct Geometry {
