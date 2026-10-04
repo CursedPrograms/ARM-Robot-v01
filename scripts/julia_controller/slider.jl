@@ -1,5 +1,5 @@
 # slider.jl - On-screen drag slider widget, drawn with SDL2. Julia
-# counterpart of slider_controller.py's Slider class.
+# counterpart of controller.py's Slider class.
 
 const SLIDER_X = 175
 const SLIDER_WIDTH = 300

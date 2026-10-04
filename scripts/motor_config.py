@@ -3,7 +3,7 @@
 motor_config.py - Shared motor configuration, loaded from config.json at the
 repo root.
 
-Every motor-driving script (controller.py, slider_controller.py, and any
+Every motor-driving script (controller.py, IK_controller.py, and any
 future one) should call load_motor_config() instead of hardcoding its own
 servo channel numbers, angle ranges, resting angles, or invert flags - so
 config.json stays the single source of truth for the arm's physical limits.

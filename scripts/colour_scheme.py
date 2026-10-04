@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 colour_scheme.py - Shared UI colours, loaded from colour_scheme.xml at the
-repo root. Every Python UI (controller.py, slider_controller.py) asks for its
+repo root. The Python UI (controller.py) asks for its
 colours by role name (rgb("background"), rgb("button_hover"), ...) instead of
 hardcoding them, so editing that one file restyles them all.
 """

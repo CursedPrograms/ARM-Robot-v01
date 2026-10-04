@@ -178,7 +178,7 @@ How each front end applies it:
 
 | UI | How |
 |---|---|
-| Python windows (`controller.py`, `slider_controller.py`) | `scripts/colour_scheme.py` supplies the colours |
+| Python window (`controller.py`) | `scripts/colour_scheme.py` supplies the colours |
 | Web page | The controller serves `/colour_scheme.xml`; `app.js` applies it over `style.css`'s defaults |
 | Julia | Read into the drawing constants at start-up |
 | Rust (egui), Go (Fyne) | Applied as the toolkit's theme |
@@ -317,7 +317,7 @@ python scripts/controller.py --connect http://192.168.0.10:5011
 
 `--connect` can't be combined with `--serve` or `--mode fleet`.
 
-Per-motor servo channel, angle range, resting angle, and invert flag all come from `config.json` (see `scripts/motor_config.py`) - the same config `slider_controller.py` uses. `.bat` launchers (`controller.bat`, `slider_controller.bat`, `fleet_server.bat`, `run_joystick_test.bat`, `build_cpp_controller.bat`, `cpp_controller.bat`, `julia_controller.bat`, `csharp_controller.bat`/`.sh`) live at the repo root alongside `config.json`; the Python, C++, Julia, and C# sources themselves stay under `scripts/`.
+Per-motor servo channel, angle range, resting angle, and invert flag all come from `config.json` (see `scripts/motor_config.py`) - the same config every controller uses. `.bat` launchers (`controller.bat`, `fleet_server.bat`, `build_cpp_controller.bat`, `cpp_controller.bat`, `julia_controller.bat`, `csharp_controller.bat`/`.sh`) live at the repo root alongside `config.json`; the Python, C++, Julia, and C# sources themselves stay under `scripts/`.
 
 ---
 

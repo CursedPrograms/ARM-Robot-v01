@@ -76,7 +76,6 @@ from motor_config import load_motor_config, load_geometry
 from colour_scheme import rgb
 from board_id import find_board
 from IK_controller import inverse_kinematics
-from slider_controller import Slider
 
 MACROS_DIR = Path(__file__).resolve().parent / "macros"
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -132,8 +131,9 @@ MACRO_ROW_H = 16
 MACRO_LIST_MAX = 6
 MARGIN_TOP = 250
 ROW_HEIGHT = 60
-# Note: Slider (imported from slider_controller) draws using slider_controller's
-# own SLIDER_X/SLIDER_WIDTH/KNOB_RADIUS module constants, not ones defined here.
+SLIDER_X = 150         # Slider rows: track start, width and knob size
+SLIDER_WIDTH = 260
+KNOB_RADIUS = 10
 
 # Colours come from colour_scheme.xml at the repo root.
 BG_COLOR = rgb("background")
@@ -146,6 +146,8 @@ BUTTON_ACTIVE_COLOR = rgb("button_active")
 BUTTON_DISABLED_COLOR = rgb("button_disabled")
 BUTTON_RECORD_COLOR = rgb("danger")
 MACRO_SELECTED_COLOR = rgb("selected")
+TRACK_COLOR = rgb("track")
+KNOB_COLOR = rgb("accent")
 
 
 def axis_to_angle(value, lo, hi, rest, deadzone=DEADZONE):
@@ -271,6 +273,54 @@ def save_macro(steps):
 def load_macro(path):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f).get("steps", [])
+
+
+class Slider:
+    def __init__(self, label, channel, lo, hi, rest, y):
+        self.label = label
+        self.channel = channel
+        self.lo = lo
+        self.hi = hi
+        self.rest = max(lo, min(hi, rest))
+        self.y = y
+        self.angle = self.rest
+        self.dragging = False
+
+    def value_to_x(self):
+        frac = (self.angle - self.lo) / (self.hi - self.lo)
+        return SLIDER_X + int(frac * SLIDER_WIDTH)
+
+    def x_to_value(self, x):
+        frac = (x - SLIDER_X) / SLIDER_WIDTH
+        frac = max(0.0, min(1.0, frac))
+        return int(round(self.lo + frac * (self.hi - self.lo)))
+
+    def handle_event(self, event):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            mx, my = event.pos
+            track_rect = pygame.Rect(
+                SLIDER_X - KNOB_RADIUS, self.y - KNOB_RADIUS,
+                SLIDER_WIDTH + KNOB_RADIUS * 2, KNOB_RADIUS * 2,
+            )
+            if track_rect.collidepoint(mx, my):
+                self.dragging = True
+                self.angle = self.x_to_value(mx)
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self.dragging = False
+        elif event.type == pygame.MOUSEMOTION and self.dragging:
+            self.angle = self.x_to_value(event.pos[0])
+
+    def draw(self, surface, font):
+        track_rect = pygame.Rect(SLIDER_X, self.y - 3, SLIDER_WIDTH, 6)
+        pygame.draw.rect(surface, TRACK_COLOR, track_rect, border_radius=3)
+        pygame.draw.circle(surface, KNOB_COLOR, (self.value_to_x(), self.y), KNOB_RADIUS)
+
+        channel_part = f"ch {self.channel}, " if self.channel is not None else ""
+        label_surf = font.render(f"{self.label} ({channel_part}{self.lo}-{self.hi})", True, TEXT_COLOR)
+        surface.blit(label_surf, (20, self.y - 10))
+
+        value_surf = font.render(f"{self.angle:3d}", True, TEXT_COLOR)
+        surface.blit(value_surf, (SLIDER_X + SLIDER_WIDTH + 20, self.y - 10))
 
 
 class Button:
