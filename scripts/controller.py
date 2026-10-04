@@ -595,11 +595,16 @@ def main():
     parser.add_argument("--rift-host", type=str, default="127.0.0.1", help="Fleet mode: RIFT/NORA fleet-registry host (default 127.0.0.1)")
     parser.add_argument("--rift-port", type=int, default=5000, help="Fleet mode: RIFT/NORA fleet-registry port (default 5000)")
     parser.add_argument("--connect", type=str, default=None, metavar="URL", help="Client mode: no serial port; mirror and control another controller's arm, e.g. --connect http://192.168.0.10:5011")
-    parser.add_argument("--serve", action="store_true", help="Start the HTTP server (web page + RIFT API) in any mode, so browsers/phones stay in sync with this window")
+    parser.add_argument("--serve", action="store_true", help="Start the HTTP server (web page + RIFT API) in any mode - the default now, kept for old launchers")
+    parser.add_argument("--no-serve", action="store_true", help="Don't start the HTTP server or join RIFT unless you pick Fleet mode")
     parser.add_argument("--no-register", action="store_true", help="Fleet mode: don't heartbeat to the fleet registry, just serve the HTTP API")
     args = parser.parse_args()
     if args.connect and (args.serve or args.mode == "fleet"):
         parser.error("--connect can't be combined with --serve or --mode fleet (this controller has no arm of its own)")
+    # Like every other robot, ARM joins RIFT and serves its web page whenever
+    # it runs (a client mirroring another arm has nothing of its own to serve).
+    if not args.connect and not args.no_serve:
+        args.serve = True
 
     if args.list:
         list_joysticks()

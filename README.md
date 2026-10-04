@@ -296,7 +296,7 @@ run.bat --port COM6 --mode fleet
 
 Whichever controller owns the Arduino's serial port keeps one shared set of motor angles. Its own window (sliders, joystick, IK), the browser page on your phone, and RIFT all read and write that same set, so setting Motor 1 to 140 anywhere shows up everywhere: the desktop sliders move, the web page's sliders move, and the arm moves. The rule is "last writer wins": whichever input changed most recently sets the angle, and inputs you aren't touching just follow it.
 
-Fleet mode starts the HTTP server automatically; add `--serve` to run it in any mode (Sliders, Joystick, IK) so the phone stays in sync while you use the desktop window:
+The Python and C++ controllers start the HTTP server and join RIFT whenever they run, in any mode (Sliders, Joystick, IK), like every other robot - so ARM always shows up in RIFT and the phone stays in sync with the desktop window. Add `--no-serve` to keep it to yourself (the Go/Rust/Julia/C# controllers still need `--serve`):
 
 ```bash
 python scripts/controller.py --port COM6 --serve

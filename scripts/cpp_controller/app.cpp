@@ -90,6 +90,7 @@ struct Args {
     bool noRegister = false;
     bool listPorts = false;
     bool serve = false;
+    bool noServe = false;   // default is to serve + join RIFT, like every other robot
     std::string connect; // --connect URL: client mode, no serial port
 };
 
@@ -775,6 +776,7 @@ bool parseArgs(int argc, char** argv, Args& out) {
         else if (a == "--no-register") out.noRegister = true;
         else if (a == "--list-ports") out.listPorts = true;
         else if (a == "--serve") out.serve = true;
+        else if (a == "--no-serve") out.noServe = true;
         else if (a == "--connect") out.connect = next("--connect");
         else if (a == "--mode") {
             std::string m = next("--mode");
@@ -801,6 +803,9 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "--connect can't be combined with --serve or --mode fleet (this controller has no arm of its own)\n");
         return 1;
     }
+    // Like every other robot, ARM joins RIFT and serves its web page whenever
+    // it runs (a client mirroring another arm has nothing of its own to serve).
+    if (app.args.connect.empty() && !app.args.noServe) app.args.serve = true;
 
     if (app.args.listPorts) {
         auto ports = listSerialPorts();
