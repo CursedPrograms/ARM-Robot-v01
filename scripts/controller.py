@@ -74,7 +74,7 @@ except ImportError:
 
 from motor_config import load_motor_config, load_geometry
 from colour_scheme import rgb
-from board_id import find_board
+from board_id import identify_ports
 from IK_controller import inverse_kinematics
 
 MACROS_DIR = Path(__file__).resolve().parent / "macros"
@@ -186,11 +186,20 @@ def list_serial_ports():
 
 
 def autodetect_port():
-    port = find_board("arm", 115200)  # board answers "WHO" with "I am Arm"
-    if port:
-        return port
+    # The board answers "WHO" with "I am Arm". DREAM probes the same ports
+    # when run_all.bat starts them together, and a port it has open just
+    # looks busy here -- so ask a few times before guessing.
+    answered = {}
+    for attempt in range(3):
+        answered = identify_ports([115200])
+        for port, who in answered.items():
+            if who == "arm":
+                return port
+        time.sleep(1 + attempt)
+    # Guess only among ports nobody identified as another board (NORA's
+    # ESP32 is a CP210x and would otherwise pass for an Arduino).
     for p in list_ports.comports():
-        if any(hint in p.description.lower() for hint in ARDUINO_HINTS):
+        if p.device not in answered and any(hint in p.description.lower() for hint in ARDUINO_HINTS):
             return p.device
     return None
 
