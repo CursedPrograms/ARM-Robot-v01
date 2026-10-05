@@ -37,7 +37,7 @@
 - [KIDA-Robot-v00](https://github.com/CursedPrograms/KIDA-Robot-v00)
 - [KIDA-Robot-v01](https://github.com/CursedPrograms/KIDA-Robot-v01)
 - [NORA-Robot-v00](https://github.com/CursedPrograms/NORA-Robot-v00)
-- [DREAM/ComCentre](https://github.com/CursedPrograms/DREAM)
+- [DREAM](https://github.com/CursedPrograms/DREAM)
 - [RIFT](https://github.com/CursedPrograms/RIFT)
 
 ---
