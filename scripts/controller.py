@@ -348,6 +348,9 @@ class Button:
         surface.blit(text, text.get_rect(center=self.rect.center))
 
 
+LADDER = None   # the fleet's WiFi ladder, with --ladder (fleet_ladder.py)
+
+
 def start_fleet_heartbeat(rift_host, rift_port, fleet_port=DEFAULT_FLEET_PORT, interval=FLEET_HEARTBEAT_SECS):
     """Background thread that repeatedly POSTs /register to RIFT/NORA. Safe to
     call even if the target isn't reachable yet - it just keeps retrying."""
@@ -359,7 +362,7 @@ def start_fleet_heartbeat(rift_host, rift_port, fleet_port=DEFAULT_FLEET_PORT, i
         while not stop_event.is_set():
             try:
                 requests.post(
-                    f"http://{rift_host}:{rift_port}/register",
+                    f"http://{(LADDER.registry_host() if LADDER else None) or rift_host}:{rift_port}/register",
                     data={
                         "name": FLEET_NAME,
                         "type": FLEET_TYPE,
@@ -607,7 +610,12 @@ def main():
     parser.add_argument("--serve", action="store_true", help="Start the HTTP server (web page + RIFT API) in any mode - the default now, kept for old launchers")
     parser.add_argument("--no-serve", action="store_true", help="Don't start the HTTP server or join RIFT unless you pick Fleet mode")
     parser.add_argument("--no-register", action="store_true", help="Fleet mode: don't heartbeat to the fleet registry, just serve the HTTP API")
+    parser.add_argument("--ladder", action="store_true",
+                    help="join / host the fleet's WiFi (fleet_ladder.py; FLEET_LADDER=1 does the same)")
     args = parser.parse_args()
+    global LADDER
+    from fleet_ladder import FleetLadder   # the fleet's WiFi ladder (fleet TODO, section 2)
+    LADDER = FleetLadder("ARMCTL", enabled=args.ladder or None).start()
     if args.connect and (args.serve or args.mode == "fleet"):
         parser.error("--connect can't be combined with --serve or --mode fleet (this controller has no arm of its own)")
     # Like every other robot, ARM joins RIFT and serves its web page whenever
