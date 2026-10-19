@@ -73,7 +73,7 @@ fn table() -> &'static HashMap<String, Color32> {
 
 /// The colour for a role such as "background" or "warn".
 pub fn colour(name: &str) -> Color32 {
-    table().get(name).copied().unwrap_or(Color32::MAGENTA)
+    table().get(name).copied().unwrap_or(Color32::from_rgb(255, 0, 255))
 }
 
 /// Restyles egui's dark theme with the scheme.
@@ -83,7 +83,7 @@ pub fn apply(ctx: &egui::Context) {
     v.window_fill = colour("panel");
     v.extreme_bg_color = colour("panel");
     v.override_text_color = Some(colour("text"));
-    v.weak_text_color = Some(colour("text_dim"));
+    // egui 0.29 has no weak_text_color field; dim text comes from override_text_color
     v.selection.bg_fill = colour("accent");
     v.hyperlink_color = colour("accent_hover");
 

@@ -13,6 +13,9 @@
 //   controller.exe --port COM6
 //   controller.exe --port COM6 --mode slider
 //   controller.exe --port COM6 --mode fleet --fleet-port 5011
+//
+// Keys, the joystick and the gamepad work as in controller.py; F1 shows them
+// all (keys_window.cpp, from scripts/keymap.json).
 
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
@@ -31,6 +34,7 @@
 
 #include "fleet_server.h"
 #include "joystick.h"
+#include "keys_window.h"
 #include "kinematics.h"
 #include "macros.h"
 #include "colour_scheme.h"
@@ -42,6 +46,7 @@
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "winmm.lib")
+#pragma comment(lib, "advapi32.lib")
 
 using Clock = std::chrono::steady_clock;
 
@@ -63,6 +68,24 @@ constexpr int BUTTON_STEP_DEG = 5; // hat/button motors (3, 4) move this much pe
 // Resend unchanged commands this often, so arm.ino knows the PC is still here
 // (it eases back to rest after 2 s of silence).
 constexpr double KEEPALIVE_SECS = 0.5;
+// Look for a joystick or gamepad plugged in / out this often (and on WM_DEVICECHANGE).
+constexpr double DEVICE_CHECK_SECS = 1.0;
+
+// ---- Keyboard wiring (every mode except IK), as in controller.py ----
+struct KeyStep { int key; int motor; int direction; }; // direction before invert
+constexpr KeyStep KEY_STEPS[] = {
+    {'A', 1, -1}, {'D', 1, 1},
+    {'W', 2, 1}, {'S', 2, -1},
+    {'R', 3, 1}, {'F', 3, -1},
+    {'T', 4, 1}, {'G', 4, -1},
+    {'Q', 5, -1}, {'E', 5, 1},
+};
+constexpr int KEY_CLAW = VK_SPACE;
+constexpr int KEY_REST = VK_HOME;
+constexpr int KEY_STEP_DEG = 5;
+constexpr int KEY_FINE_STEP_DEG = 1; // with Shift held
+constexpr int KEY_REPEAT_DELAY_MS = 300;
+constexpr int KEY_REPEAT_INTERVAL_MS = 80;
 
 // ---- Control IDs ----
 enum ControlId {
@@ -83,7 +106,7 @@ struct Args {
     int baud = 115200;
     double rateHz = 30.0;
     std::optional<Mode> mode;
-    int device = 0;
+    int device = -1; // -1: a joystick first, else a gamepad
     int fleetPort = 5011;
     std::string riftHost = "127.0.0.1";
     int riftPort = 5000;
@@ -112,6 +135,11 @@ struct App {
 
     Joystick joystick;
     bool joystickAvailable = false;
+    bool devicesChanged = false;  // WM_DEVICECHANGE: look again at the next tick
+    Clock::time_point lastDeviceCheck;
+
+    int heldKey = 0;              // the step key being held, repeated in tick()
+    Clock::time_point nextRepeat;
     int prevHatY = 0;             // last frame's hat/buttons, to step once per press
     unsigned long prevButtons = 0;
 
@@ -387,6 +415,33 @@ void publishByChannel(App& app, const std::map<int, int>& byChannel) {
     if (app.remoteActive) app.remote.queue(changed);
 }
 
+// Writes {motor: angle} to the shared angles (and to the hub, in client mode).
+void setShared(App& app, const std::map<int, int>& byMotor) {
+    {
+        std::lock_guard<std::mutex> lock(app.fleetState.mutex);
+        for (const auto& kv : byMotor) app.fleetState.angles[kv.first] = kv.second;
+    }
+    if (app.remoteActive && !byMotor.empty()) app.remote.queue(byMotor);
+}
+
+// Moves motor n by deg in direction +1/-1 (before invert), within its limits.
+void stepMotor(App& app, int n, int direction, int deg) {
+    const auto& m = app.motors.at(n);
+    if (m.invert) direction = -direction;
+    int angle;
+    {
+        std::lock_guard<std::mutex> lock(app.fleetState.mutex);
+        angle = std::clamp(app.fleetState.angles[n] + direction * deg, m.min, m.max);
+    }
+    setShared(app, {{n, angle}});
+}
+
+void setClaw(App& app, bool closed) {
+    const auto& m = app.motors.at(6);
+    if (m.invert) closed = !closed;
+    setShared(app, {{6, closed ? m.max : m.min}});
+}
+
 // Slider positions adopt the shared angles.
 void followSliders(App& app) {
     std::lock_guard<std::mutex> lock(app.fleetState.mutex);
@@ -441,7 +496,61 @@ void setMode(App& app, Mode m) {
 // Per-frame update (called from the WM_TIMER handler)
 // ---------------------------------------------------------------------
 
+bool keysDrive(const App& app) {
+    return !app.playing && app.mode != Mode::Ik && app.adopted;
+}
+
+const KeyStep* findKeyStep(int key) {
+    for (const auto& k : KEY_STEPS) if (k.key == key) return &k;
+    return nullptr;
+}
+
+void keyStep(App& app, const KeyStep& k) {
+    bool fine = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    stepMotor(app, k.motor, k.direction, fine ? KEY_FINE_STEP_DEG : KEY_STEP_DEG);
+}
+
+// Picks the device to drive with again: a joystick wins over a gamepad. Called
+// every DEVICE_CHECK_SECS and when Windows says a device came or went.
+void checkDevices(App& app) {
+    auto now = Clock::now();
+    if (!app.devicesChanged && std::chrono::duration<double>(now - app.lastDeviceCheck).count() < DEVICE_CHECK_SECS) return;
+    if (app.devicesChanged) refreshJoysticks();
+    app.devicesChanged = false;
+    app.lastDeviceCheck = now;
+
+    InputDevice want = pickDevice(app.args.device);
+    if (want == app.joystick.device() && app.joystickAvailable == (want.kind != InputDevice::Kind::None)) return;
+    app.joystick.close();
+    app.joystickAvailable = want.kind != InputDevice::Kind::None && app.joystick.open(want);
+    app.prevHatY = 0;
+    app.prevButtons = 0;
+    if (app.joystickAvailable) {
+        std::printf("Using %s: %s\n", app.joystick.isGamepad() ? "gamepad" : "joystick", want.name.c_str());
+    } else {
+        std::printf("No joystick or gamepad - plug one in any time for Joystick mode.\n");
+        if (app.mode == Mode::Joystick) setMode(app, Mode::Slider);
+    }
+    applyModeVisibility(app);
+}
+
+// Repeats the held step key like pygame's key.set_repeat in controller.py.
+void repeatHeldKey(App& app) {
+    if (!app.heldKey) return;
+    if (!(GetAsyncKeyState(app.heldKey) & 0x8000)) {
+        app.heldKey = 0;
+        return;
+    }
+    auto now = Clock::now();
+    if (now < app.nextRepeat) return;
+    app.nextRepeat = now + std::chrono::milliseconds(KEY_REPEAT_INTERVAL_MS);
+    if (const KeyStep* k = findKeyStep(app.heldKey); k && keysDrive(app)) keyStep(app, *k);
+}
+
 void tick(App& app) {
+    checkDevices(app);
+    repeatHeldKey(app);
+
     if (app.playing) {
         double elapsed = std::chrono::duration<double>(Clock::now() - app.playStart).count();
         while (app.playIndex < app.playSteps.size() && app.playSteps[app.playIndex].t <= elapsed) {
@@ -467,19 +576,12 @@ void tick(App& app) {
         if (app.joystick.poll(state)) {
             local = toMotorKeyed(app, joystickCommands(state, app.motors));
             if (app.adopted) {
-                std::map<int, int> changed;
-                for (auto [n, dir] : joystickSteps(state, app.prevHatY, app.prevButtons)) {
-                    const auto& m = app.motors.at(n);
-                    if (m.invert) dir = -dir;
-                    std::lock_guard<std::mutex> lock(app.fleetState.mutex);
-                    int angle = std::clamp(app.fleetState.angles[n] + dir * BUTTON_STEP_DEG, m.min, m.max);
-                    app.fleetState.angles[n] = angle;
-                    changed[n] = angle;
-                }
-                if (app.remoteActive && !changed.empty()) app.remote.queue(changed);
+                for (auto [n, dir] : joystickSteps(state, app.prevHatY, app.prevButtons)) stepMotor(app, n, dir, BUTTON_STEP_DEG);
             }
             app.prevHatY = state.hatY;
             app.prevButtons = state.buttons;
+        } else {
+            app.devicesChanged = true; // unplugged: pick again
         }
     } else if (app.mode == Mode::Slider) {
         std::map<int, int> byMotor;
@@ -525,7 +627,7 @@ void tick(App& app) {
     }
 
     if (app.mode == Mode::Joystick) {
-        SetWindowTextA(app.staticWarn, app.joystickAvailable ? "" : "No joystick connected.");
+        SetWindowTextA(app.staticWarn, app.joystickAvailable ? "" : "No joystick or gamepad - plug one in any time.");
     }
 
     // Merge this mode's input into the shared angles, then always send/record
@@ -642,6 +744,52 @@ void onCommand(App& app, WPARAM wParam) {
     }
 }
 
+// The keyboard, for every key the controller window or one of its controls
+// gets: true if it was one of ours (then the control doesn't see it, so Space
+// doesn't press a button and Home doesn't move a slider).
+bool onKey(App& app, bool down, int key, LPARAM lParam) {
+    bool repeat = down && (lParam & (1 << 30)); // Windows' own repeat: tick() does ours
+    if (key == VK_ESCAPE) {
+        if (down) DestroyWindow(app.hwnd);
+        return true;
+    }
+    if (key == VK_F1) {
+        if (down && !repeat) openKeysWindow(app.hwnd);
+        return true;
+    }
+    if (key >= '1' && key <= '9') {
+        int idx = key - '1';
+        if (down && !app.playing && idx < static_cast<int>(app.macros.size())) {
+            app.selectedMacro = idx;
+            SendMessage(app.listMacros, LB_SETCURSEL, idx, 0);
+        }
+        return true;
+    }
+    if (const KeyStep* k = findKeyStep(key)) {
+        if (!down) {
+            if (app.heldKey == key) app.heldKey = 0;
+        } else if (!repeat) {
+            if (keysDrive(app)) keyStep(app, *k);
+            app.heldKey = key;
+            app.nextRepeat = Clock::now() + std::chrono::milliseconds(KEY_REPEAT_DELAY_MS);
+        }
+        return true;
+    }
+    if (key == KEY_CLAW) {
+        if (!repeat && keysDrive(app)) setClaw(app, down);
+        return true;
+    }
+    if (key == KEY_REST) {
+        if (down && !repeat && keysDrive(app)) {
+            std::map<int, int> rest;
+            for (const auto& kv : app.motors) rest[kv.first] = kv.second.rest;
+            setShared(app, rest);
+        }
+        return true;
+    }
+    return false;
+}
+
 // Brushes for the colour scheme (colour_scheme.xml); created once, live for the process.
 HBRUSH backgroundBrush() {
     static HBRUSH b = CreateSolidBrush(schemeColour("background"));
@@ -700,6 +848,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_TIMER:
             tick(g_app);
             return 0;
+        case WM_DEVICECHANGE: // a joystick or gamepad may have come or gone
+            g_app.devicesChanged = true;
+            return TRUE;
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
@@ -824,14 +975,15 @@ int main(int argc, char** argv) {
     double reach = app.geometry.upperArmLength + app.geometry.forearmLength + app.geometry.wristLength;
     app.reach = reach > 0 ? reach : 300;
 
-    auto jsIds = connectedJoystickIds();
-    if (static_cast<size_t>(app.args.device) < jsIds.size()) {
-        app.joystickAvailable = app.joystick.open(jsIds[app.args.device]);
-        if (app.joystickAvailable) {
-            std::printf("Using joystick: %s\n", joystickName(jsIds[app.args.device]).c_str());
-        }
+    // A joystick first, else a gamepad; picked again when one is plugged in / out (checkDevices).
+    InputDevice device = pickDevice(app.args.device);
+    app.joystickAvailable = device.kind != InputDevice::Kind::None && app.joystick.open(device);
+    if (app.joystickAvailable) {
+        std::printf("Using %s: %s\n", app.joystick.isGamepad() ? "gamepad" : "joystick", device.name.c_str());
+    } else {
+        std::printf("No joystick or gamepad yet - plug one in any time for Joystick mode.\n");
     }
-    if (!app.joystickAvailable) std::printf("No joystick found - Joystick mode will be unavailable.\n");
+    app.lastDeviceCheck = Clock::now();
 
     std::string port = !app.args.connect.empty() ? "" : (app.args.port.empty() ? autodetectPort() : app.args.port);
     if (!app.args.connect.empty()) {
@@ -892,6 +1044,11 @@ int main(int argc, char** argv) {
 
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0)) {
+        bool key = msg.message == WM_KEYDOWN || msg.message == WM_KEYUP;
+        if (key && (msg.hwnd == app.hwnd || IsChild(app.hwnd, msg.hwnd)) &&
+            onKey(app, msg.message == WM_KEYDOWN, static_cast<int>(msg.wParam), msg.lParam)) {
+            continue;
+        }
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }

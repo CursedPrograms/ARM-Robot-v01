@@ -222,13 +222,50 @@ def geometry_ready(geometry):
     return geometry.get("upperArmLength", 0) != 0 and geometry.get("forearmLength", 0) != 0
 
 
+roll_axis = AXIS_MOTOR5   # wrist roll: the stick's twist; on a gamepad the right stick across (pick_joystick)
+
+
+def _is_gamepad(index):
+    """True for a pad SDL knows the layout of (Xbox, PlayStation...), False for a plain stick like ARM's."""
+    try:
+        from pygame._sdl2 import controller
+        controller.init()
+        return bool(controller.is_controller(index))
+    except Exception:
+        return False
+
+
+def pick_joystick(device=None):
+    """The joystick to drive with: `device` if given, else the first plain joystick (ARM's own
+    stick comes first), else the first gamepad. None if nothing is plugged in."""
+    global roll_axis
+    count = pygame.joystick.get_count()
+    if device is not None:
+        order = [device] if device < count else []
+    else:
+        sticks = [i for i in range(count) if not _is_gamepad(i)]
+        order = sticks + [i for i in range(count) if i not in sticks]
+    if not order:
+        return None
+    js = pygame.joystick.Joystick(order[0])
+    js.init()
+    roll_axis = AXIS_MOTOR5
+    if _is_gamepad(order[0]):
+        # A gamepad's axis 2 is the right stick on Windows but the left trigger on Linux (resting
+        # at -1): use whichever of the right stick's axes rests in the middle.
+        pygame.event.pump()
+        roll_axis = next((a for a in (2, 3) if a < js.get_numaxes() and abs(js.get_axis(a)) < 0.5), None)
+    print(f"Using {'gamepad' if _is_gamepad(order[0]) else 'joystick'}: {js.get_name()}")
+    return js
+
+
 def joystick_commands(js, motors):
     """Read the joystick and return {channel: angle} for the stick motors
     (1, 2, 5) and the claw (6). The hat/button motors (3, 4) step per press
     instead, see joystick_step()."""
     motor1_val = js.get_axis(AXIS_MOTOR1) if js.get_numaxes() > AXIS_MOTOR1 else 0.0
     motor2_val = js.get_axis(AXIS_MOTOR2) if js.get_numaxes() > AXIS_MOTOR2 else 0.0
-    motor5_val = js.get_axis(AXIS_MOTOR5) if js.get_numaxes() > AXIS_MOTOR5 else 0.0
+    motor5_val = js.get_axis(roll_axis) if roll_axis is not None and js.get_numaxes() > roll_axis else 0.0
 
     motor6_close = js.get_button(BUTTON_MOTOR6_CLOSE) if js.get_numbuttons() > BUTTON_MOTOR6_CLOSE else 0
     if motors[6]["invert"]:
@@ -596,7 +633,7 @@ def round_avatar(path, size):
 
 def main():
     parser = argparse.ArgumentParser(description="Unified joystick/slider/IK arm controller with macro recording, over USB serial.")
-    parser.add_argument("--device", type=int, default=0, help="Joystick index to use (default 0)")
+    parser.add_argument("--device", type=int, default=None, help="Joystick index to use (default: a joystick first, else a gamepad)")
     parser.add_argument("--port", type=str, default=None, help="Serial port, e.g. COM6 (auto-detected if omitted)")
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate (default 115200, must match .ino)")
     parser.add_argument("--rate", type=float, default=30, help="Update rate in Hz (default 30)")
@@ -635,13 +672,9 @@ def main():
 
     pygame.init()
     pygame.joystick.init()
-    js = None
-    if pygame.joystick.get_count() > args.device:
-        js = pygame.joystick.Joystick(args.device)
-        js.init()
-        print(f"Using joystick: {js.get_name()}")
-    else:
-        print("No joystick found - Joystick mode will be unavailable.")
+    js = pick_joystick(args.device)   # a joystick first, else a gamepad; picked again when one is plugged in / out
+    if js is None:
+        print("No joystick or gamepad yet - plug one in any time for Joystick mode.")
 
     port = None if args.connect else (args.port or autodetect_port())
     ser = None
@@ -784,6 +817,15 @@ def main():
                     running = False
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                     running = False
+                elif event.type in (pygame.JOYDEVICEADDED, pygame.JOYDEVICEREMOVED):
+                    if js is not None:
+                        js.quit()
+                    js = pick_joystick(args.device)   # the joystick wins over a gamepad
+                    if js is None and mode == "joystick":
+                        mode = "slider"
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_F1:
+                    import keymap   # scripts/keymap.py: every key and joystick input, in its own window
+                    keymap.open_window()
                 elif event.type == pygame.KEYDOWN and pygame.K_1 <= event.key <= pygame.K_9 and not playing:
                     idx = event.key - pygame.K_1
                     if idx < len(macros):

@@ -10,7 +10,7 @@ pub enum Mode {
 
 #[derive(Clone, Debug)]
 pub struct Options {
-    pub device: i32,
+    pub device: Option<i32>, // None: a joystick first, else a gamepad
     pub port: Option<String>,
     pub baud: u32,
     pub rate: f64,
@@ -28,7 +28,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
-            device: 0,
+            device: None,
             port: None,
             baud: 115200,
             rate: 30.0,
@@ -59,7 +59,7 @@ impl Options {
                 "--port" => o.port = Some(value(&a)?),
                 "--connect" => o.connect = Some(value(&a)?),
                 "--rift-host" => o.rift_host = value(&a)?,
-                "--device" => o.device = num(&a, &value(&a)?)?,
+                "--device" => o.device = Some(num(&a, &value(&a)?)?),
                 "--baud" => o.baud = num(&a, &value(&a)?)?,
                 "--fleet-port" => o.fleet_port = num(&a, &value(&a)?)?,
                 "--rift-port" => o.rift_port = num(&a, &value(&a)?)?,

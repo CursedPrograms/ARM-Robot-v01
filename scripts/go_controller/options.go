@@ -17,7 +17,7 @@ const (
 )
 
 type Options struct {
-	Device        int
+	Device        int // -1: a joystick first, else a gamepad
 	Port          string
 	Baud          int
 	Rate          float64
@@ -33,7 +33,7 @@ type Options struct {
 }
 
 func parseOptions(args []string) (Options, error) {
-	o := Options{Baud: 115200, Rate: 30, FleetPort: defaultFleetPort, RiftHost: "127.0.0.1", RiftPort: 5000}
+	o := Options{Device: -1, Baud: 115200, Rate: 30, FleetPort: defaultFleetPort, RiftHost: "127.0.0.1", RiftPort: 5000}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		value := func() (string, error) {

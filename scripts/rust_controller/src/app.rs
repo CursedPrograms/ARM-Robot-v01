@@ -7,10 +7,14 @@
 //! values in `slider_vals`/`ik`), then `step()` plays the role of controller.py's
 //! per-frame loop body - merge this mode's input into the shared angles, then
 //! send/record the shared state.
+//!
+//! Keys, the joystick and the gamepad work as in controller.py; F1 shows them
+//! all (keys_window.rs, from scripts/keymap.json).
 
 use crate::config::{self, Geometry, Motors};
 use crate::fleet::{self, FleetServer};
-use crate::joystick::Joystick;
+use crate::joystick::{self, Joystick};
+use crate::keys_window::{self, Keymap};
 use crate::kinematics;
 use crate::macros::{self, MacroStep};
 use crate::options::{Mode, Options};
@@ -38,6 +42,40 @@ const BUTTON_STEP_DEG: i32 = 5; // hat/button motors (3, 4) move this much per p
 // (it eases back to rest after 2 s of silence).
 const KEEPALIVE: Duration = Duration::from_millis(500);
 const DEADZONE: f64 = 0.05;
+// Look for a joystick or gamepad plugged in / out this often.
+const DEVICE_CHECK: Duration = Duration::from_secs(1);
+
+// ---- Keyboard wiring (every mode except IK), as in controller.py ----
+const KEY_STEPS: [(egui::Key, i32, i32); 10] = [
+    // key, motor, direction before invert
+    (egui::Key::A, 1, -1),
+    (egui::Key::D, 1, 1),
+    (egui::Key::W, 2, 1),
+    (egui::Key::S, 2, -1),
+    (egui::Key::R, 3, 1),
+    (egui::Key::F, 3, -1),
+    (egui::Key::T, 4, 1),
+    (egui::Key::G, 4, -1),
+    (egui::Key::Q, 5, -1),
+    (egui::Key::E, 5, 1),
+];
+const KEY_CLAW: egui::Key = egui::Key::Space;
+const KEY_REST: egui::Key = egui::Key::Home;
+const KEY_STEP_DEG: i32 = 5;
+const KEY_FINE_STEP_DEG: i32 = 1; // with Shift held
+const KEY_REPEAT_DELAY: Duration = Duration::from_millis(300);
+const KEY_REPEAT_INTERVAL: Duration = Duration::from_millis(80);
+const MACRO_KEYS: [egui::Key; 9] = [
+    egui::Key::Num1,
+    egui::Key::Num2,
+    egui::Key::Num3,
+    egui::Key::Num4,
+    egui::Key::Num5,
+    egui::Key::Num6,
+    egui::Key::Num7,
+    egui::Key::Num8,
+    egui::Key::Num9,
+];
 
 #[derive(Default)]
 struct IkState {
@@ -59,6 +97,7 @@ pub struct App {
     serial: Option<SerialLink>,
     serial_open: Arc<AtomicBool>,
     joystick: Option<Joystick>,
+    next_device_check: Instant,
     status_base: String,
     status: String,
 
@@ -73,6 +112,11 @@ pub struct App {
     prev_hat_y: i32,
     prev_forward: bool,
     prev_backward: bool,
+
+    // ---- keyboard ----
+    held_key: Option<egui::Key>, // the step key being held, repeated in handle_keys()
+    next_repeat: Instant,
+    keys_window: Option<Keymap>, // open while Some (F1)
 
     fleet: Option<FleetServer>,
     fleet_error: String,
@@ -115,16 +159,15 @@ impl App {
         let reach = geometry.upper_arm + geometry.forearm + geometry.wrist;
         let reach = if reach > 0.0 { reach } else { 300.0 } as i32;
 
-        let joystick = match Joystick::open(opts.device) {
-            Ok(j) => {
-                println!("Using joystick: {}", j.name);
-                Some(j)
-            }
-            Err(e) => {
-                println!("No joystick found - Joystick mode will be unavailable. ({e})");
-                None
-            }
-        };
+        // A joystick first, else a gamepad; picked again when one is plugged in / out (check_devices).
+        let mut joystick = None;
+        match joystick::pick(opts.device, &mut joystick) {
+            Ok(_) => match &joystick {
+                Some(j) => println!("Using {}: {}", if j.is_gamepad() { "gamepad" } else { "joystick" }, j.name),
+                None => println!("No joystick or gamepad yet - plug one in any time for Joystick mode."),
+            },
+            Err(e) => println!("No joystick or gamepad - Joystick mode will be unavailable. ({e})"),
+        }
 
         let mut serial = None;
         let status_base = if let Some(url) = &opts.connect {
@@ -164,6 +207,10 @@ impl App {
             serial_open: Arc::new(AtomicBool::new(serial.is_some())),
             serial,
             joystick,
+            next_device_check: Instant::now() + DEVICE_CHECK,
+            held_key: None,
+            next_repeat: Instant::now(),
+            keys_window: None,
             status: status_base.clone(),
             status_base,
             mode,
@@ -300,13 +347,13 @@ impl App {
 
         if self.adopted {
             if hat_y != 0 && hat_y != self.prev_hat_y {
-                self.step_motor(3, hat_y.signum());
+                self.step_motor(3, hat_y.signum(), BUTTON_STEP_DEG);
             }
             if forward && !self.prev_forward {
-                self.step_motor(4, 1);
+                self.step_motor(4, 1, BUTTON_STEP_DEG);
             }
             if backward && !self.prev_backward {
-                self.step_motor(4, -1);
+                self.step_motor(4, -1, BUTTON_STEP_DEG);
             }
         }
         (self.prev_hat_y, self.prev_forward, self.prev_backward) = (hat_y, forward, backward);
@@ -326,18 +373,125 @@ impl App {
         ])
     }
 
-    /// Moves motor n BUTTON_STEP_DEG in direction +1/-1 (before invert), within its limits.
-    fn step_motor(&mut self, n: i32, direction: i32) {
+    /// Moves motor n by deg in direction +1/-1 (before invert), within its limits.
+    fn step_motor(&mut self, n: i32, direction: i32, deg: i32) {
         let m = &self.motors[&n];
         let direction = if m.invert { -direction } else { direction };
-        let angle = {
-            let mut s = lock(&self.shared);
-            let angle = (s.angles[&n] + direction * BUTTON_STEP_DEG).clamp(m.min, m.max);
-            s.angles.insert(n, angle);
-            angle
-        };
+        let angle = (lock(&self.shared).angles[&n] + direction * deg).clamp(m.min, m.max);
+        self.set_shared(BTreeMap::from([(n, angle)]));
+    }
+
+    fn set_claw(&mut self, closed: bool) {
+        let m = &self.motors[&6];
+        let closed = closed != m.invert;
+        self.set_shared(BTreeMap::from([(6, if closed { m.max } else { m.min })]));
+    }
+
+    /// Writes {motor: angle} to the shared angles (and to the hub, in client mode).
+    fn set_shared(&mut self, by_motor: BTreeMap<i32, i32>) {
+        lock(&self.shared).angles.extend(by_motor.iter().map(|(n, a)| (*n, *a)));
         if let Some(remote) = &self.remote {
-            remote.queue(&BTreeMap::from([(n, angle)]));
+            remote.queue(&by_motor);
+        }
+    }
+
+    // =====================================================================
+    // Keyboard and plugging in
+    // =====================================================================
+
+    fn keys_drive(&self) -> bool {
+        !self.playing && self.mode != Mode::Ik && self.adopted
+    }
+
+    fn key_step(&mut self, key: egui::Key, fine: bool) {
+        if let Some(&(_, motor, direction)) = KEY_STEPS.iter().find(|(k, _, _)| *k == key) {
+            self.step_motor(motor, direction, if fine { KEY_FINE_STEP_DEG } else { KEY_STEP_DEG });
+        }
+    }
+
+    /// This frame's keys. Ours are taken out of egui's input, so Space doesn't
+    /// press a focused button and Home doesn't move a slider.
+    fn handle_keys(&mut self, ctx: &egui::Context) {
+        let mut ours = Vec::new();
+        let (shift, keys_down) = ctx.input_mut(|i| {
+            i.events.retain(|e| match e {
+                egui::Event::Key { key, pressed, repeat, .. } => {
+                    let mine = *key == egui::Key::Escape
+                        || *key == egui::Key::F1
+                        || *key == KEY_CLAW
+                        || *key == KEY_REST
+                        || MACRO_KEYS.contains(key)
+                        || KEY_STEPS.iter().any(|(k, _, _)| k == key);
+                    if mine && !*repeat {
+                        ours.push((*key, *pressed)); // egui's own repeat is ignored: ours is below
+                    }
+                    !mine
+                }
+                _ => true,
+            });
+            (i.modifiers.shift, i.keys_down.clone())
+        });
+
+        for (key, pressed) in ours {
+            if key == egui::Key::Escape && pressed {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else if key == egui::Key::F1 && pressed {
+                self.keys_window = Some(keys_window::load());
+            } else if let Some(i) = MACRO_KEYS.iter().position(|k| *k == key) {
+                if pressed && !self.playing && i < self.macro_files.len() {
+                    self.selected_macro = Some(i);
+                }
+            } else if key == KEY_CLAW {
+                if self.keys_drive() {
+                    self.set_claw(pressed);
+                }
+            } else if key == KEY_REST {
+                if pressed && self.keys_drive() {
+                    let rest = self.motors.iter().map(|(n, m)| (*n, m.rest)).collect();
+                    self.set_shared(rest);
+                }
+            } else if pressed {
+                if self.keys_drive() {
+                    self.key_step(key, shift);
+                }
+                self.held_key = Some(key);
+                self.next_repeat = Instant::now() + KEY_REPEAT_DELAY;
+            } else if self.held_key == Some(key) {
+                self.held_key = None;
+            }
+        }
+
+        // Repeat the held step key like pygame's key.set_repeat in controller.py.
+        if let Some(key) = self.held_key {
+            if !keys_down.contains(&key) {
+                self.held_key = None;
+            } else if Instant::now() >= self.next_repeat {
+                self.next_repeat = Instant::now() + KEY_REPEAT_INTERVAL;
+                if self.keys_drive() {
+                    self.key_step(key, shift);
+                }
+            }
+        }
+    }
+
+    /// Picks the device to drive with again: a joystick wins over a gamepad.
+    fn check_devices(&mut self) {
+        if Instant::now() < self.next_device_check {
+            return;
+        }
+        self.next_device_check = Instant::now() + DEVICE_CHECK;
+        if !matches!(joystick::pick(self.opts.device, &mut self.joystick), Ok(true)) {
+            return;
+        }
+        (self.prev_hat_y, self.prev_forward, self.prev_backward) = (0, false, false);
+        match &self.joystick {
+            Some(j) => println!("Using {}: {}", if j.is_gamepad() { "gamepad" } else { "joystick" }, j.name),
+            None => {
+                println!("No joystick or gamepad - plug one in any time for Joystick mode.");
+                if self.mode == Mode::Joystick {
+                    self.mode = Mode::Slider;
+                }
+            }
         }
     }
 
@@ -390,7 +544,7 @@ impl App {
                 if self.joystick.is_some() {
                     local = Some(self.joystick_commands());
                 } else {
-                    self.warn = "No joystick connected.".into();
+                    self.warn = "No joystick or gamepad - plug one in any time.".into();
                 }
             }
             Mode::Slider => {
@@ -664,29 +818,15 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        if !self.playing {
-            let keys = [
-                egui::Key::Num1,
-                egui::Key::Num2,
-                egui::Key::Num3,
-                egui::Key::Num4,
-                egui::Key::Num5,
-                egui::Key::Num6,
-                egui::Key::Num7,
-                egui::Key::Num8,
-                egui::Key::Num9,
-            ];
-            for (i, key) in keys.iter().enumerate() {
-                if i < self.macro_files.len() && ctx.input(|inp| inp.key_pressed(*key)) {
-                    self.selected_macro = Some(i);
-                }
-            }
-        }
+        self.check_devices();
+        self.handle_keys(ctx);
 
         egui::CentralPanel::default().show(ctx, |ui| self.draw(ui));
+        if let Some(keymap) = &self.keys_window {
+            if !keys_window::show(ctx, keymap) {
+                self.keys_window = None;
+            }
+        }
         self.step();
 
         let rate = if self.opts.rate > 0.0 { self.opts.rate } else { 30.0 };

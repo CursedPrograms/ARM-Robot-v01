@@ -96,7 +96,7 @@ var themeRoles = map[fyne.ThemeColorName]string{
 	theme.ColorNameForeground:        "text",
 	theme.ColorNameForegroundOnPrimary: "text",
 	theme.ColorNameDisabled:          "text_dim",
-	theme.ColorNamePlaceholder:       "text_dim",
+	theme.ColorNamePlaceHolder:       "text_dim",
 	theme.ColorNameButton:            "button",
 	theme.ColorNameDisabledButton:    "button_disabled",
 	theme.ColorNameHover:             "button_hover",

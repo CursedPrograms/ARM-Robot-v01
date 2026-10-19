@@ -15,10 +15,11 @@ add_executable(controller
     kinematics.cpp
     serial_port.cpp
     joystick.cpp
+    keys_window.cpp
     macros.cpp
     fleet_server.cpp
     remote_arm.cpp
     controller.rc
 )
 
-target_link_libraries(controller PRIVATE ws2_32 setupapi winmm comctl32 gdi32)
+target_link_libraries(controller PRIVATE ws2_32 setupapi winmm comctl32 gdi32 advapi32)

@@ -15,6 +15,9 @@ Modes (click the buttons, or pick one with --mode at startup):
     Fleet    - starts an HTTP bridge so the RIFT dashboard (or any browser)
                can see and control this arm over the network
 
+Keys, the joystick and the gamepad work as in controller.py; F1 shows them
+all (keys_window.jl, from scripts/keymap.json).
+
 Requires (see Project.toml):
     julia --project=@. -e "import Pkg; Pkg.instantiate()"
 
@@ -34,6 +37,8 @@ include(joinpath(@__DIR__, "slider.jl"))
 include(joinpath(@__DIR__, "macros.jl"))
 include(joinpath(@__DIR__, "fleet_server.jl"))
 include(joinpath(@__DIR__, "remote_arm.jl"))
+include(joinpath(@__DIR__, "joystick.jl"))
+include(joinpath(@__DIR__, "keys_window.jl"))
 
 const WEB_DIR = normpath(joinpath(@__DIR__, "..", "web"))
 
@@ -50,6 +55,21 @@ const BUTTON_STEP_DEG = 5  # hat/button motors (3, 4) move this much per press
 # (it eases back to rest after 2 s of silence).
 const KEEPALIVE_SECS = 0.5
 const DEADZONE = 0.05
+
+# ---- Keyboard wiring (every mode except IK), as in controller.py ----
+const KEY_STEPS = Dict(  # scancode => (motor, direction before invert)
+    SDL_SCANCODE_A => (1, -1), SDL_SCANCODE_D => (1, 1),
+    SDL_SCANCODE_W => (2, 1), SDL_SCANCODE_S => (2, -1),
+    SDL_SCANCODE_R => (3, 1), SDL_SCANCODE_F => (3, -1),
+    SDL_SCANCODE_T => (4, 1), SDL_SCANCODE_G => (4, -1),
+    SDL_SCANCODE_Q => (5, -1), SDL_SCANCODE_E => (5, 1),
+)
+const KEY_CLAW = SDL_SCANCODE_SPACE
+const KEY_REST = SDL_SCANCODE_HOME
+const KEY_STEP_DEG = 5
+const KEY_FINE_STEP_DEG = 1  # with Shift held
+const KEY_REPEAT_DELAY = 0.3
+const KEY_REPEAT_INTERVAL = 0.08
 
 # Descriptions that identify likely Arduino USB-serial adapters, for --port auto-detect
 const ARDUINO_HINTS = ("arduino", "ch340", "usb-serial", "usb serial", "cp210", "ftdi")
@@ -188,18 +208,18 @@ function autodetect_port()
 end
 
 function list_joysticks()
-    SDL_Init(SDL_INIT_JOYSTICK) == 0 || return println("Could not init joystick subsystem: $(unsafe_string(SDL_GetError()))")
+    SDL_Init(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) == 0 || return println("Could not init joystick subsystem: $(unsafe_string(SDL_GetError()))")
     n = SDL_NumJoysticks()
     if n == 0
         println("No joystick/controller devices found.")
     else
         println("Found $n device(s):")
         for i in 0:(n - 1)
-            js = SDL_JoystickOpen(i)
-            if js != C_NULL
-                name = unsafe_string(SDL_JoystickName(js))
-                println("  [$i] $name  (axes=$(SDL_JoystickNumAxes(js)), buttons=$(SDL_JoystickNumButtons(js)), hats=$(SDL_JoystickNumHats(js)))")
-                SDL_JoystickClose(js)
+            inp = open_input(i)
+            if inp !== nothing
+                js = inp.js
+                println("  [$i] $(inp.name)  ($(input_kind(inp)), axes=$(SDL_JoystickNumAxes(js)), buttons=$(SDL_JoystickNumButtons(js)), hats=$(SDL_JoystickNumHats(js)))")
+                close_input(inp)
             end
         end
     end
@@ -229,16 +249,13 @@ end
 
 # {channel => angle} for the stick motors (1, 2, 5) and the claw (6). The
 # hat/button motors (3, 4) step per press instead, see joystick_steps!().
-function joystick_commands(js, motors)
+function joystick_commands(inp, motors)
     SDL_JoystickUpdate()
-    numaxes = SDL_JoystickNumAxes(js)
-    numbuttons = SDL_JoystickNumButtons(js)
+    motor1_val = input_axis(inp, AXIS_MOTOR1)
+    motor2_val = input_axis(inp, AXIS_MOTOR2)
+    motor5_val = input_axis(inp, AXIS_MOTOR5)
 
-    motor1_val = numaxes > AXIS_MOTOR1 ? SDL_JoystickGetAxis(js, AXIS_MOTOR1) / 32768.0 : 0.0
-    motor2_val = numaxes > AXIS_MOTOR2 ? SDL_JoystickGetAxis(js, AXIS_MOTOR2) / 32768.0 : 0.0
-    motor5_val = numaxes > AXIS_MOTOR5 ? SDL_JoystickGetAxis(js, AXIS_MOTOR5) / 32768.0 : 0.0
-
-    motor6_close = numbuttons > BUTTON_MOTOR6_CLOSE && SDL_JoystickGetButton(js, BUTTON_MOTOR6_CLOSE) != 0
+    motor6_close = input_button(inp, BUTTON_MOTOR6_CLOSE)
     motors[6]["invert"] && (motor6_close = !motor6_close)
     motor6_angle = motor6_close ? motors[6]["max"] : motors[6]["min"]
 
@@ -256,15 +273,10 @@ end
 
 # (motor, direction) for each hat/button pressed since last frame, direction
 # +1/-1 before invert. `prev` holds last frame's hat/buttons.
-function joystick_steps!(js, prev)
-    numbuttons = SDL_JoystickNumButtons(js)
-    hat_y = 0
-    if SDL_JoystickNumHats(js) > HAT_MOTOR3
-        hat = SDL_JoystickGetHat(js, HAT_MOTOR3)
-        hat_y = (hat & SDL_HAT_UP) != 0 ? 1 : ((hat & SDL_HAT_DOWN) != 0 ? -1 : 0)
-    end
-    forward = numbuttons > BUTTON_MOTOR4_FORWARD && SDL_JoystickGetButton(js, BUTTON_MOTOR4_FORWARD) != 0
-    backward = numbuttons > BUTTON_MOTOR4_BACKWARD && SDL_JoystickGetButton(js, BUTTON_MOTOR4_BACKWARD) != 0
+function joystick_steps!(inp, prev)
+    hat_y = input_hat_y(inp, HAT_MOTOR3)
+    forward = input_button(inp, BUTTON_MOTOR4_FORWARD)
+    backward = input_button(inp, BUTTON_MOTOR4_BACKWARD)
 
     steps = Tuple{Int,Int}[]
     hat_y != 0 && hat_y != prev[:hat_y] && push!(steps, (3, hat_y))
@@ -274,12 +286,12 @@ function joystick_steps!(js, prev)
     return steps
 end
 
-# Moves motor n BUTTON_STEP_DEG in direction +1/-1 (before invert), within its limits.
-function step_motor!(fleet_state, motors, n, direction)
+# Moves motor n by deg in direction +1/-1 (before invert), within its limits; returns the new angle.
+function step_motor!(fleet_state, motors, n, direction, deg=BUTTON_STEP_DEG)
     m = motors[n]
     m["invert"] && (direction = -direction)
     lock(fleet_state.lock) do
-        fleet_state.angles[n] = clamp(fleet_state.angles[n] + direction * BUTTON_STEP_DEG, m["min"], m["max"])
+        fleet_state.angles[n] = clamp(fleet_state.angles[n] + direction * deg, m["min"], m["max"])
     end
 end
 
@@ -400,7 +412,7 @@ macro_row_rect(i) = (30, MACRO_LIST_Y + i * MACRO_ROW_H, 500, MACRO_ROW_H)
 
 function parse_args(argv)
     opts = Dict{Symbol,Any}(
-        :device => 0, :port => nothing, :baud => 115200, :rate => 30.0,
+        :device => -1, :port => nothing, :baud => 115200, :rate => 30.0,
         :mode => nothing, :list => false, :list_ports => false,
         :fleet_port => DEFAULT_FLEET_PORT, :rift_host => "127.0.0.1",
         :rift_port => 5000, :no_register => false, :serve => false, :connect => nothing,
@@ -472,7 +484,7 @@ function main()
     motors = load_motor_config()
     geometry = load_geometry()
 
-    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_EVENTS) == 0 ||
+    SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) == 0 ||
         error("SDL_Init failed: $(unsafe_string(SDL_GetError()))")
     TTF_Init() == 0 || error("TTF_Init failed: $(unsafe_string(SDL_GetError()))")
 
@@ -481,13 +493,11 @@ function main()
     font = TTF_OpenFont(font_path, 16)
     small_font = TTF_OpenFont(font_path, 13)
 
-    js = C_NULL
-    if SDL_NumJoysticks() > args[:device]
-        js = SDL_JoystickOpen(args[:device])
-        js != C_NULL && println("Using joystick: $(unsafe_string(SDL_JoystickName(js)))")
-    end
-    joystick_available = js != C_NULL
-    joystick_available || println("No joystick found - Joystick mode will be unavailable.")
+    # A joystick first, else a gamepad; picked again when one is plugged in / out (SDL_JOYDEVICE* events).
+    js = pick_input(args[:device], nothing)
+    js !== nothing ? println("Using $(input_kind(js)): $(js.name)") :
+        println("No joystick or gamepad yet - plug one in any time for Joystick mode.")
+    joystick_available = js !== nothing
 
     port = args[:connect] !== nothing ? nothing : (args[:port] !== nothing ? args[:port] : autodetect_port())
     sp = nothing
@@ -507,6 +517,7 @@ function main()
     window = SDL_CreateWindow("Arm Controller (Julia)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_SHOWN)
     window == C_NULL && error("Could not create window: $(unsafe_string(SDL_GetError()))")
+    main_id = SDL_GetWindowID(window)
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED)
     renderer == C_NULL && error("Could not create renderer: $(unsafe_string(SDL_GetError()))")
 
@@ -596,6 +607,27 @@ function main()
 
     last_sent = Dict{Int,Int}()
 
+    # ---- keyboard ----
+    held_key = nothing  # the step key being held, repeated below
+    next_repeat = 0.0
+    keys_win = nothing  # the F1 window while it's open
+    keys_drive() = !playing && mode != "ik" && adopted
+    set_shared! = by_motor -> begin  # also to the hub, in client mode
+        lock(() -> merge!(fleet_state.angles, by_motor), fleet_state.lock)
+        remote !== nothing && queue_remote!(remote, by_motor)
+    end
+    key_step! = sc -> begin
+        n, direction = KEY_STEPS[sc]
+        fine = (SDL_GetModState() & KMOD_SHIFT) != 0
+        angle = step_motor!(fleet_state, motors, n, direction, fine ? KEY_FINE_STEP_DEG : KEY_STEP_DEG)
+        remote !== nothing && queue_remote!(remote, Dict{Int,Int}(n => angle))
+    end
+    set_claw! = closed -> begin
+        motors[6]["invert"] && (closed = !closed)
+        set_shared!(Dict{Int,Int}(6 => closed ? motors[6]["max"] : motors[6]["min"]))
+    end
+    close_keys! = () -> (keys_win !== nothing && close_keys_window!(keys_win); keys_win = nothing)
+
     running = true
     try
         while running
@@ -604,15 +636,51 @@ function main()
                 evt = event_ref[]
                 if evt.type == SDL_QUIT
                     running = false
-                elseif evt.type == SDL_KEYDOWN
+                elseif evt.type == SDL_WINDOWEVENT && evt.window.event == SDL_WINDOWEVENT_CLOSE
+                    # With the keys window open, closing either window comes here, not as SDL_QUIT.
+                    keys_win !== nothing && evt.window.windowID == keys_win.id ? close_keys!() : (running = false)
+                elseif keys_win !== nothing && evt.type == SDL_MOUSEWHEEL && evt.wheel.windowID == keys_win.id
+                    scroll_keys_window!(keys_win, -40 * evt.wheel.y)
+                elseif keys_win !== nothing && evt.type == SDL_KEYDOWN && evt.key.windowID == keys_win.id
+                    sc = evt.key.keysym.scancode
+                    sc in (SDL_SCANCODE_ESCAPE, SDL_SCANCODE_F1) && close_keys!()
+                    sc == SDL_SCANCODE_DOWN && scroll_keys_window!(keys_win, 20)
+                    sc == SDL_SCANCODE_UP && scroll_keys_window!(keys_win, -20)
+                elseif (evt.type == SDL_KEYDOWN || evt.type == SDL_KEYUP) && evt.key.windowID == main_id && evt.key.repeat == 0
+                    # SDL's own key repeat is skipped: a held step key repeats below, like controller.py.
+                    down = evt.type == SDL_KEYDOWN
                     sc = evt.key.keysym.scancode
                     if sc == SDL_SCANCODE_ESCAPE
-                        running = false
-                    elseif !playing && SDL_SCANCODE_1 <= sc <= SDL_SCANCODE_9
+                        down && (running = false)
+                    elseif sc == SDL_SCANCODE_F1
+                        down && (keys_win === nothing ? (keys_win = open_keys_window(font_path)) : SDL_RaiseWindow(keys_win.window))
+                    elseif SDL_SCANCODE_1 <= sc <= SDL_SCANCODE_9
                         idx = Int(sc) - Int(SDL_SCANCODE_1) + 1
-                        idx <= length(macros) && (selected_macro_index = idx)
+                        down && !playing && idx <= length(macros) && (selected_macro_index = idx)
+                    elseif haskey(KEY_STEPS, sc)
+                        if down
+                            keys_drive() && key_step!(sc)
+                            held_key = sc
+                            next_repeat = time() + KEY_REPEAT_DELAY
+                        elseif held_key == sc
+                            held_key = nothing
+                        end
+                    elseif sc == KEY_CLAW
+                        keys_drive() && set_claw!(down)
+                    elseif sc == KEY_REST
+                        down && keys_drive() && set_shared!(Dict{Int,Int}(n => motors[n]["rest"] for n in motor_numbers))
                     end
-                elseif evt.type == SDL_MOUSEBUTTONDOWN && evt.button.button == SDL_BUTTON_LEFT
+                elseif evt.type == SDL_JOYDEVICEADDED || evt.type == SDL_JOYDEVICEREMOVED
+                    was = js
+                    js = pick_input(args[:device], js)  # the joystick wins over a gamepad
+                    joystick_available = js !== nothing
+                    if js !== was
+                        prev_joystick[:hat_y], prev_joystick[:forward], prev_joystick[:backward] = 0, false, false
+                        js !== nothing ? println("Using $(input_kind(js)): $(js.name)") :
+                            println("No joystick or gamepad - plug one in any time for Joystick mode.")
+                    end
+                    !joystick_available && mode == "joystick" && (mode = "slider")
+                elseif evt.type == SDL_MOUSEBUTTONDOWN && evt.button.button == SDL_BUTTON_LEFT && evt.button.windowID == main_id
                     mx, my = Int(evt.button.x), Int(evt.button.y)
                     if playing
                         if point_in(mx, my, play_rect)
@@ -673,7 +741,7 @@ function main()
                             end
                         end
                     end
-                elseif evt.type == SDL_MOUSEBUTTONUP && evt.button.button == SDL_BUTTON_LEFT
+                elseif evt.type == SDL_MOUSEBUTTONUP && evt.button.button == SDL_BUTTON_LEFT && evt.button.windowID == main_id
                     if mode == "slider"
                         for s in slider_mode_sliders
                             slider_mouse_up!(s)
@@ -683,7 +751,7 @@ function main()
                             slider_mouse_up!(s)
                         end
                     end
-                elseif evt.type == SDL_MOUSEMOTION
+                elseif evt.type == SDL_MOUSEMOTION && evt.motion.windowID == main_id
                     mx = Int(evt.motion.x)
                     if mode == "slider"
                         for s in slider_mode_sliders
@@ -700,6 +768,12 @@ function main()
             mx_ref, my_ref = Ref{Cint}(0), Ref{Cint}(0)
             SDL_GetMouseState(mx_ref, my_ref)
             mx, my = Int(mx_ref[]), Int(my_ref[])
+
+            # Repeat the held step key like pygame's key.set_repeat in controller.py.
+            if held_key !== nothing && time() >= next_repeat
+                next_repeat = time() + KEY_REPEAT_INTERVAL
+                keys_drive() && key_step!(held_key)
+            end
 
             # ---- compute + send this frame's commands ----
             warn_text = ""
@@ -736,7 +810,7 @@ function main()
                         remote !== nothing && queue_remote!(remote, Dict{Int,Int}(n => angle))
                     end
                 elseif mode == "joystick"
-                    warn_text = "No joystick connected."
+                    warn_text = "No joystick or gamepad - plug one in any time."
                 elseif mode == "slider"
                     local_commands = Dict{Int,Int}(s.channel => s.angle for s in slider_mode_sliders)
                 elseif mode == "ik"
@@ -867,12 +941,14 @@ function main()
             end
 
             SDL_RenderPresent(renderer)
+            keys_win !== nothing && draw_keys_window!(keys_win)
             sleep(args[:rate] > 0 ? 1.0 / args[:rate] : 0.033)  # sleep (not SDL_Delay) so HTTP.jl's tasks get to run
         end
     finally
         remote !== nothing && stop_remote_arm!(remote)
         sp !== nothing && close(sp)
-        js != C_NULL && SDL_JoystickClose(js)
+        js !== nothing && close_input(js)
+        close_keys!()
         font != C_NULL && TTF_CloseFont(font)
         small_font != C_NULL && TTF_CloseFont(small_font)
         renderer != C_NULL && SDL_DestroyRenderer(renderer)

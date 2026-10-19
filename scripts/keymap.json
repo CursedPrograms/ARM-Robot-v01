@@ -1,0 +1,124 @@
+{
+ "title": "ARM - controls",
+ "sections": [
+  {
+   "title": "Joystick (Joystick mode)",
+   "keys": [
+    [
+     "Stick left / right (axis 0)",
+     "motor 1, base: follows the stick, centred = rest"
+    ],
+    [
+     "Stick forward / back (axis 1)",
+     "motor 2, shoulder: follows the stick, centred = rest"
+    ],
+    [
+     "Twist (axis 2)",
+     "motor 5, wrist roll: follows the stick, centred = rest"
+    ],
+    [
+     "Hat up / down",
+     "motor 3, elbow: 5 degrees a press"
+    ],
+    [
+     "Button 3 / button 2",
+     "motor 4, wrist pitch: 5 degrees a press"
+    ],
+    [
+     "Trigger (button 0)",
+     "motor 6, claw: held = closed, released = open"
+    ],
+    [
+     "",
+     "a held hat direction or button is one press; motors 3 and 4 stay where you stepped them"
+    ],
+    [
+     "",
+     "every motor stays inside its min / max from config.json; invert flips its direction"
+    ]
+   ]
+  },
+  {
+   "title": "Gamepad (Joystick mode, when no joystick is plugged in)",
+   "keys": [
+    [
+     "Left stick across / up-down",
+     "motor 1, base / motor 2, shoulder"
+    ],
+    [
+     "Right stick across",
+     "motor 5, wrist roll"
+    ],
+    [
+     "D-pad up / down",
+     "motor 3, elbow: 5 degrees a press"
+    ],
+    [
+     "Y (3) / X (2)",
+     "motor 4, wrist pitch: 5 degrees a press"
+    ],
+    [
+     "A (0)",
+     "motor 6, claw: held = closed, released = open"
+    ],
+    [
+     "",
+     "a joystick always wins over a gamepad; plug either in any time"
+    ]
+   ]
+  },
+  {
+   "title": "Keyboard (every mode except IK; click the window first)",
+   "keys": [
+    [
+     "A / D",
+     "motor 1, base: -5 / +5 degrees"
+    ],
+    [
+     "W / S",
+     "motor 2, shoulder: up / down 5 degrees"
+    ],
+    [
+     "R / F",
+     "motor 3, elbow: up / down 5 degrees"
+    ],
+    [
+     "T / G",
+     "motor 4, wrist pitch: up / down 5 degrees"
+    ],
+    [
+     "Q / E",
+     "motor 5, wrist roll: -5 / +5 degrees"
+    ],
+    [
+     "Space",
+     "motor 6, claw: held = closed, released = open"
+    ],
+    [
+     "Shift + any of those",
+     "1 degree steps, for fine positioning"
+    ],
+    [
+     "Home",
+     "every motor back to the rest pose"
+    ],
+    [
+     "1 - 9",
+     "pick a macro"
+    ],
+    [
+     "F1",
+     "this window"
+    ],
+    [
+     "Esc",
+     "quit"
+    ],
+    [
+     "",
+     "holding a key repeats it; in Joystick mode a key moves a stick motor until you move that stick again"
+    ]
+   ]
+  }
+ ]
+}

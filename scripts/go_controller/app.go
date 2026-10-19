@@ -8,6 +8,9 @@ package main
 // A single ticker plays the role of controller.py's per-frame loop: tick()
 // merges this mode's input into the shared angles, then sends/records the
 // shared state.
+//
+// Keys, the joystick and the gamepad work as in controller.py; F1 shows them
+// all (keys_window.go, from scripts/keymap.json).
 
 import (
 	"fmt"
@@ -22,6 +25,7 @@ import (
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -41,6 +45,32 @@ const (
 // keepalive: resend unchanged commands this often, so arm.ino knows the PC is
 // still here (it eases back to rest after 2 s of silence).
 const keepalive = 500 * time.Millisecond
+
+// deviceCheck: look for a joystick or gamepad plugged in / out this often.
+const deviceCheck = time.Second
+
+// keyStep is a key that moves a motor; direction is before invert.
+type keyStep struct{ motor, direction int }
+
+// Keyboard wiring (every mode except IK), as in controller.py.
+var keySteps = map[fyne.KeyName]keyStep{
+	fyne.KeyA: {1, -1}, fyne.KeyD: {1, 1},
+	fyne.KeyW: {2, 1}, fyne.KeyS: {2, -1},
+	fyne.KeyR: {3, 1}, fyne.KeyF: {3, -1},
+	fyne.KeyT: {4, 1}, fyne.KeyG: {4, -1},
+	fyne.KeyQ: {5, -1}, fyne.KeyE: {5, 1},
+}
+
+var macroKeys = []fyne.KeyName{fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4, fyne.Key5, fyne.Key6, fyne.Key7, fyne.Key8, fyne.Key9}
+
+const (
+	keyClaw           = fyne.KeySpace
+	keyRest           = fyne.KeyHome
+	keyStepDeg        = 5
+	keyFineStepDeg    = 1 // with Shift held
+	keyRepeatDelay    = 300 * time.Millisecond
+	keyRepeatInterval = 80 * time.Millisecond
+)
 
 type sliderRow struct {
 	motor  int
@@ -83,6 +113,7 @@ type App struct {
 	serial      *SerialLink
 	serialOpen  atomic.Bool
 	joystick    *Joystick
+	nextDevice  time.Time // next look for a joystick or gamepad plugged in / out
 	statusBase  string
 	statusShown string
 
@@ -96,6 +127,12 @@ type App struct {
 	// last frame's hat/buttons, to step once per press
 	prevHatY                  int
 	prevForward, prevBackward bool
+
+	// keyboard
+	keysDown   map[fyne.KeyName]bool
+	heldKey    fyne.KeyName // the step key being held, repeated in tick()
+	nextRepeat time.Time
+	keysWin    fyne.Window // the F1 window while it's open
 
 	fleet      *FleetServer
 	fleetError string
@@ -139,7 +176,8 @@ type App struct {
 }
 
 func newApp(opts Options) *App {
-	a := &App{opts: opts, prevLocal: map[int]int{}, lastSent: map[int]int{}, selectedMacro: -1, lanIP: localLanIP()}
+	a := &App{opts: opts, prevLocal: map[int]int{}, lastSent: map[int]int{}, selectedMacro: -1, lanIP: localLanIP(),
+		keysDown: map[fyne.KeyName]bool{}}
 	a.motors = loadMotors()
 	a.order = sortedMotorNumbers(a.motors)
 	a.geometry = loadGeometry()
@@ -149,12 +187,18 @@ func newApp(opts Options) *App {
 	}
 	a.reach = int(reach)
 
-	if j, err := OpenJoystick(opts.Device); err == nil {
+	// A joystick first, else a gamepad; picked again when one is plugged in / out (checkDevices).
+	j, _, err := PickJoystick(opts.Device, nil)
+	switch {
+	case j != nil:
 		a.joystick = j
-		fmt.Printf("Using joystick: %s\n", j.Name)
-	} else {
-		fmt.Printf("No joystick found - Joystick mode will be unavailable. (%v)\n", err)
+		fmt.Printf("Using %s: %s\n", deviceKind(j), j.Name)
+	case err != nil:
+		fmt.Printf("No joystick or gamepad - Joystick mode will be unavailable. (%v)\n", err)
+	default:
+		fmt.Println("No joystick or gamepad yet - plug one in any time for Joystick mode.")
 	}
+	a.nextDevice = time.Now().Add(deviceCheck)
 
 	switch {
 	case opts.Connect != "":
@@ -397,20 +441,120 @@ func (a *App) stopPlayback() {
 	a.applyMode()
 }
 
-func (a *App) onKey(e *fyne.KeyEvent) {
-	if e.Name == fyne.KeyEscape {
+// ---------------------------------------------------------------------
+// Keyboard and plugging in
+// ---------------------------------------------------------------------
+
+func deviceKind(j *Joystick) string {
+	if j.IsGamepad() {
+		return "gamepad"
+	}
+	return "joystick"
+}
+
+func (a *App) keysDrive() bool { return !a.playing && a.mode != ModeIK && a.adopted }
+
+func (a *App) shiftHeld() bool {
+	return a.keysDown[desktop.KeyShiftLeft] || a.keysDown[desktop.KeyShiftRight]
+}
+
+func (a *App) keyStep(key fyne.KeyName) {
+	k := keySteps[key]
+	deg := keyStepDeg
+	if a.shiftHeld() {
+		deg = keyFineStepDeg
+	}
+	a.stepMotor(k.motor, k.direction, deg)
+}
+
+func ours(key fyne.KeyName) bool {
+	_, step := keySteps[key]
+	return step || key == keyClaw || key == keyRest || key == fyne.KeyEscape || key == fyne.KeyF1
+}
+
+// onKeyDown gets every key press in the window, whatever has focus (a held
+// key isn't repeated here: tick() does that). Our keys take the focus off a
+// button or slider, so Space doesn't press it.
+func (a *App) onKeyDown(e *fyne.KeyEvent) {
+	a.keysDown[e.Name] = true
+	if ours(e.Name) {
+		a.win.Canvas().Unfocus()
+	}
+	switch {
+	case e.Name == fyne.KeyEscape:
 		a.fyneApp.Quit()
-		return
-	}
-	if a.playing {
-		return
-	}
-	keys := []fyne.KeyName{fyne.Key1, fyne.Key2, fyne.Key3, fyne.Key4, fyne.Key5, fyne.Key6, fyne.Key7, fyne.Key8, fyne.Key9}
-	for i, k := range keys {
-		if e.Name == k && i < len(a.macroFiles) {
-			a.macroList.Select(widget.ListItemID(i))
+	case e.Name == fyne.KeyF1:
+		a.openKeysWindow()
+	case e.Name == keyClaw:
+		if a.keysDrive() {
+			a.setClaw(true)
+		}
+	case e.Name == keyRest:
+		if a.keysDrive() {
+			rest := map[int]int{}
+			for n, m := range a.motors {
+				rest[n] = m.Rest
+			}
+			a.setShared(rest)
+		}
+	default:
+		if _, ok := keySteps[e.Name]; ok {
+			if a.keysDrive() {
+				a.keyStep(e.Name)
+			}
+			a.heldKey = e.Name
+			a.nextRepeat = time.Now().Add(keyRepeatDelay)
+		}
+		for i, k := range macroKeys {
+			if e.Name == k && !a.playing && i < len(a.macroFiles) {
+				a.macroList.Select(widget.ListItemID(i))
+			}
 		}
 	}
+}
+
+func (a *App) onKeyUp(e *fyne.KeyEvent) {
+	delete(a.keysDown, e.Name)
+	if e.Name == a.heldKey {
+		a.heldKey = ""
+	}
+	if e.Name == keyClaw && a.keysDrive() {
+		a.setClaw(false)
+	}
+}
+
+// repeatHeldKey repeats the held step key like pygame's key.set_repeat in controller.py.
+func (a *App) repeatHeldKey() {
+	if a.heldKey == "" || time.Now().Before(a.nextRepeat) {
+		return
+	}
+	a.nextRepeat = time.Now().Add(keyRepeatInterval)
+	if a.keysDrive() {
+		a.keyStep(a.heldKey)
+	}
+}
+
+// checkDevices picks the device to drive with again: a joystick wins over a gamepad.
+func (a *App) checkDevices() {
+	if time.Now().Before(a.nextDevice) {
+		return
+	}
+	a.nextDevice = time.Now().Add(deviceCheck)
+	j, changed, _ := PickJoystick(a.opts.Device, a.joystick)
+	a.joystick = j
+	if !changed {
+		return
+	}
+	a.prevHatY, a.prevForward, a.prevBackward = 0, false, false
+	if j != nil {
+		fmt.Printf("Using %s: %s\n", deviceKind(j), j.Name)
+	} else {
+		fmt.Println("No joystick or gamepad - plug one in any time for Joystick mode.")
+		if a.mode == ModeJoystick {
+			a.mode = ModeSlider
+		}
+	}
+	a.applyMode()
 }
 
 // ---------------------------------------------------------------------
@@ -527,13 +671,13 @@ func (a *App) joystickCommands() map[int]int {
 	forward, backward := js.Button(buttonMotor4Forward), js.Button(buttonMotor4Backward)
 	if a.adopted {
 		if hatY != 0 && hatY != a.prevHatY {
-			a.stepMotor(3, hatY)
+			a.stepMotor(3, hatY, buttonStepDeg)
 		}
 		if forward && !a.prevForward {
-			a.stepMotor(4, 1)
+			a.stepMotor(4, 1, buttonStepDeg)
 		}
 		if backward && !a.prevBackward {
-			a.stepMotor(4, -1)
+			a.stepMotor(4, -1, buttonStepDeg)
 		}
 	}
 	a.prevHatY, a.prevForward, a.prevBackward = hatY, forward, backward
@@ -559,19 +703,41 @@ func (a *App) joystickCommands() map[int]int {
 	}
 }
 
-// stepMotor moves motor n buttonStepDeg in direction +1/-1 (before invert), within its limits.
-func (a *App) stepMotor(n, direction int) {
+// stepMotor moves motor n by deg in direction +1/-1 (before invert), within its limits.
+func (a *App) stepMotor(n, direction, deg int) {
 	m := a.motors[n]
 	if m.Invert {
 		direction = -direction
 	}
-	angle := a.shared.Step(n, direction*buttonStepDeg, m.Min, m.Max)
+	angle := a.shared.Step(n, direction*deg, m.Min, m.Max)
 	if a.remote != nil {
 		a.shared.Queue(map[int]int{n: angle})
 	}
 }
 
+func (a *App) setClaw(closed bool) {
+	m := a.motors[6]
+	angle := m.Min
+	if closed != m.Invert {
+		angle = m.Max
+	}
+	a.setShared(map[int]int{6: angle})
+}
+
+// setShared writes {motor: angle} to the shared angles (and to the hub, in client mode).
+func (a *App) setShared(byMotor map[int]int) {
+	for n, angle := range byMotor {
+		a.shared.Set(n, angle)
+	}
+	if a.remote != nil {
+		a.shared.Queue(byMotor)
+	}
+}
+
 func (a *App) tick() {
+	a.checkDevices()
+	a.repeatHeldKey()
+
 	shown := a.statusBase
 	if a.remote != nil {
 		state := "UNREACHABLE"
@@ -623,7 +789,7 @@ func (a *App) tick() {
 		if a.joystick != nil {
 			local = a.joystickCommands()
 		} else {
-			a.warn = "No joystick connected."
+			a.warn = "No joystick or gamepad - plug one in any time."
 		}
 	case ModeSlider:
 		local = map[int]int{}
@@ -723,7 +889,10 @@ func (a *App) run() {
 	a.win = a.fyneApp.NewWindow("Arm Controller (Go)")
 	a.win.SetContent(container.NewPadded(a.buildUI()))
 	a.win.Resize(fyne.NewSize(620, 720))
-	a.win.Canvas().SetOnTypedKey(a.onKey)
+	if dc, ok := a.win.Canvas().(desktop.Canvas); ok {
+		dc.SetOnKeyDown(a.onKeyDown)
+		dc.SetOnKeyUp(a.onKeyUp)
+	}
 
 	if a.mode == ModeFleet || a.opts.Serve {
 		a.ensureFleetStarted()

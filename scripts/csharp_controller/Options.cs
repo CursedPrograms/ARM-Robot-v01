@@ -10,7 +10,7 @@ public sealed class Options
 {
     public static Options Current { get; set; } = new();
 
-    public int Device { get; set; }
+    public int? Device { get; set; } // null: a joystick first, else a gamepad
     public string? Port { get; set; }
     public int Baud { get; set; } = 115200;
     public double Rate { get; set; } = 30;

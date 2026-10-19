@@ -6,11 +6,15 @@
 //
 // The UI is built in code (no XAML) and driven by a single DispatcherTimer
 // "tick" that plays the role of controller.py's per-frame loop.
+//
+// Keys, the joystick and the gamepad work as in controller.py; F1 shows them
+// all (KeysWindow.cs, from scripts/keymap.json).
 
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Layout;
 using Avalonia.Threading;
 
@@ -32,6 +36,22 @@ public sealed class MainWindow : Window
     // Resend unchanged commands this often, so arm.ino knows the PC is still here
     // (it eases back to rest after 2 s of silence).
     static readonly TimeSpan Keepalive = TimeSpan.FromSeconds(0.5);
+    // Look for a joystick or gamepad plugged in / out this often.
+    static readonly TimeSpan DeviceCheck = TimeSpan.FromSeconds(1);
+
+    // ---- Keyboard wiring (every mode except IK), as in controller.py ----
+    static readonly Dictionary<Key, (int Motor, int Direction)> KeySteps = new() // direction before invert
+    {
+        [Key.A] = (1, -1), [Key.D] = (1, 1),
+        [Key.W] = (2, 1), [Key.S] = (2, -1),
+        [Key.R] = (3, 1), [Key.F] = (3, -1),
+        [Key.T] = (4, 1), [Key.G] = (4, -1),
+        [Key.Q] = (5, -1), [Key.E] = (5, 1),
+    };
+    const Key KeyClaw = Key.Space, KeyRest = Key.Home;
+    const int KeyStepDeg = 5, KeyFineStepDeg = 1; // fine: with Shift held
+    static readonly TimeSpan KeyRepeatDelay = TimeSpan.FromMilliseconds(300);
+    static readonly TimeSpan KeyRepeatInterval = TimeSpan.FromMilliseconds(80);
 
     sealed class SliderRow
     {
@@ -56,7 +76,8 @@ public sealed class MainWindow : Window
     readonly double _reach;
 
     readonly SerialLink _serial = new();
-    readonly JoystickInput? _joystick;
+    JoystickInput? _joystick;
+    DateTime _nextDeviceCheck;
     string _statusText = "";
 
     ControlMode _mode;
@@ -100,6 +121,12 @@ public sealed class MainWindow : Window
     bool _prevForward, _prevBackward;
     bool _adopted; // a client waits for the hub's real angles before its own inputs may write
 
+    // ---- keyboard ----
+    readonly HashSet<Key> _keysDown = new(); // to tell the OS's own key repeat from a new press
+    Key? _heldKey;                            // the step key being held, repeated in TickCore
+    DateTime _nextRepeat;
+    bool _shift;
+
     // ---- fleet ----
     readonly FleetServer _fleet = new();
     readonly FleetState _fleetState = new();
@@ -125,9 +152,11 @@ public sealed class MainWindow : Window
         _reach = reach > 0 ? reach : 300;
         foreach (var (n, m) in _motors) _fleetState.Angles[n] = m.Rest;
 
-        _joystick = JoystickInput.Open(opts.Device, out string? joystickProblem);
-        if (_joystick != null) Console.WriteLine($"Using joystick: {_joystick.Name}");
-        else Console.WriteLine($"No joystick found - Joystick mode will be unavailable. ({joystickProblem})");
+        // A joystick first, else a gamepad; picked again when one is plugged in / out (CheckDevices).
+        _joystick = JoystickInput.Pick(opts.Device, null, out string? joystickProblem);
+        if (_joystick != null) Console.WriteLine($"Using {(_joystick.IsGamepad ? "gamepad" : "joystick")}: {_joystick.Name}");
+        else Console.WriteLine($"No joystick or gamepad yet - plug one in any time for Joystick mode. ({joystickProblem})");
+        _nextDeviceCheck = DateTime.UtcNow + DeviceCheck;
 
         string? port = opts.Connect != null ? null : opts.Port ?? SerialLink.AutoDetect();
         if (port != null)
@@ -156,6 +185,11 @@ public sealed class MainWindow : Window
         RefreshMacroList();
         ApplyModeVisibility();
         if (_mode == ControlMode.Fleet || opts.Serve) EnsureFleetStarted();
+
+        // Tunnel: the window sees the keys before a focused button or slider does.
+        AddHandler(KeyDownEvent, OnKeyDownTunnel, RoutingStrategies.Tunnel);
+        AddHandler(KeyUpEvent, OnKeyUpTunnel, RoutingStrategies.Tunnel);
+        Deactivated += (_, _) => { _keysDown.Clear(); _heldKey = null; };
 
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(opts.Rate > 0 ? 1000.0 / opts.Rate : 33) };
         _timer.Tick += (_, _) => Tick();
@@ -369,18 +403,98 @@ public sealed class MainWindow : Window
         SetMode(_playPrevMode);
     }
 
-    protected override void OnKeyDown(KeyEventArgs e)
+    // =====================================================================
+    // Keyboard
+    // =====================================================================
+
+    bool KeysDrive => !_playing && _mode != ControlMode.Ik && _adopted;
+
+    void KeyStep(Key key)
     {
-        base.OnKeyDown(e);
+        var (motor, direction) = KeySteps[key];
+        StepMotor(motor, direction, _shift ? KeyFineStepDeg : KeyStepDeg);
+    }
+
+    // Marks our keys handled, so Space doesn't press a focused button and Home
+    // doesn't move a slider or the macro list.
+    void OnKeyDownTunnel(object? sender, KeyEventArgs e)
+    {
+        _shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        bool repeat = !_keysDown.Add(e.Key); // the OS's own repeat: RepeatHeldKey does ours
         if (e.Key == Key.Escape)
         {
             Close();
         }
-        else if (!_playing && e.Key >= Key.D1 && e.Key <= Key.D9)
+        else if (e.Key == Key.F1)
+        {
+            if (!repeat) KeysWindow.Open(this);
+        }
+        else if (e.Key >= Key.D1 && e.Key <= Key.D9)
         {
             int idx = (int)e.Key - (int)Key.D1;
-            if (idx < _macros.Count) _macroList.SelectedIndex = idx;
+            if (!_playing && idx < _macros.Count) _macroList.SelectedIndex = idx;
         }
+        else if (KeySteps.ContainsKey(e.Key))
+        {
+            if (!repeat)
+            {
+                if (KeysDrive) KeyStep(e.Key);
+                _heldKey = e.Key;
+                _nextRepeat = DateTime.UtcNow + KeyRepeatDelay;
+            }
+        }
+        else if (e.Key == KeyClaw)
+        {
+            if (!repeat && KeysDrive) SetClaw(true);
+        }
+        else if (e.Key == KeyRest)
+        {
+            if (!repeat && KeysDrive) SetShared(_motors.ToDictionary(kv => kv.Key, kv => kv.Value.Rest));
+        }
+        else
+        {
+            return;
+        }
+        e.Handled = true;
+    }
+
+    void OnKeyUpTunnel(object? sender, KeyEventArgs e)
+    {
+        _keysDown.Remove(e.Key);
+        _shift = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+        if (e.Key == _heldKey) _heldKey = null;
+        if (e.Key == KeyClaw && KeysDrive) SetClaw(false);
+        if (e.Key is KeyClaw or KeyRest or Key.Escape or Key.F1 || KeySteps.ContainsKey(e.Key)) e.Handled = true;
+    }
+
+    // Repeats the held step key like pygame's key.set_repeat in controller.py.
+    void RepeatHeldKey()
+    {
+        if (_heldKey is not Key key || DateTime.UtcNow < _nextRepeat) return;
+        _nextRepeat = DateTime.UtcNow + KeyRepeatInterval;
+        if (KeysDrive) KeyStep(key);
+    }
+
+    // Picks the device to drive with again: a joystick wins over a gamepad.
+    void CheckDevices()
+    {
+        if (DateTime.UtcNow < _nextDeviceCheck) return;
+        _nextDeviceCheck = DateTime.UtcNow + DeviceCheck;
+        var was = _joystick;
+        _joystick = JoystickInput.Pick(_opts.Device, _joystick, out _);
+        if (_joystick == was) return;
+        _prevHatY = 0;
+        _prevForward = _prevBackward = false;
+        if (_joystick != null)
+        {
+            Console.WriteLine($"Using {(_joystick.IsGamepad ? "gamepad" : "joystick")}: {_joystick.Name}");
+        }
+        else
+        {
+            Console.WriteLine("No joystick or gamepad - plug one in any time for Joystick mode.");
+            if (_mode == ControlMode.Joystick) SetMode(ControlMode.Slider);
+        }
+        ApplyModeVisibility();
     }
 
     protected override void OnClosed(EventArgs e)
@@ -420,9 +534,9 @@ public sealed class MainWindow : Window
         bool forward = js.Button(ButtonMotor4Forward), backward = js.Button(ButtonMotor4Backward);
         if (_adopted)
         {
-            if (hatY != 0 && hatY != _prevHatY) StepMotor(3, hatY > 0 ? 1 : -1);
-            if (forward && !_prevForward) StepMotor(4, 1);
-            if (backward && !_prevBackward) StepMotor(4, -1);
+            if (hatY != 0 && hatY != _prevHatY) StepMotor(3, hatY > 0 ? 1 : -1, ButtonStepDeg);
+            if (forward && !_prevForward) StepMotor(4, 1, ButtonStepDeg);
+            if (backward && !_prevBackward) StepMotor(4, -1, ButtonStepDeg);
         }
         _prevHatY = hatY;
         _prevForward = forward;
@@ -443,18 +557,31 @@ public sealed class MainWindow : Window
         };
     }
 
-    // Moves motor n ButtonStepDeg in direction +1/-1 (before invert), within its limits.
-    void StepMotor(int n, int direction)
+    // Moves motor n by deg in direction +1/-1 (before invert), within its limits.
+    void StepMotor(int n, int direction, int deg)
     {
         var m = _motors[n];
         if (m.Invert) direction = -direction;
         int angle;
+        lock (_fleetState.Lock) angle = Math.Clamp(_fleetState.Angles[n] + direction * deg, m.Min, m.Max);
+        SetShared(new Dictionary<int, int> { [n] = angle });
+    }
+
+    void SetClaw(bool closed)
+    {
+        var m = _motors[6];
+        if (m.Invert) closed = !closed;
+        SetShared(new Dictionary<int, int> { [6] = closed ? m.Max : m.Min });
+    }
+
+    // Writes {motor: angle} to the shared angles (and to the hub, in client mode).
+    void SetShared(Dictionary<int, int> byMotor)
+    {
         lock (_fleetState.Lock)
         {
-            angle = Math.Clamp(_fleetState.Angles[n] + direction * ButtonStepDeg, m.Min, m.Max);
-            _fleetState.Angles[n] = angle;
+            foreach (var (n, angle) in byMotor) _fleetState.Angles[n] = angle;
         }
-        _remote?.Queue(new Dictionary<int, int> { [n] = angle });
+        _remote?.Queue(byMotor);
     }
 
     static bool SameCommands(Dictionary<int, int> a, Dictionary<int, int> b) =>
@@ -558,6 +685,9 @@ public sealed class MainWindow : Window
 
     void TickCore()
     {
+        CheckDevices();
+        RepeatHeldKey();
+
         if (_playing)
         {
             double elapsed = _playClock.Elapsed.TotalSeconds;
@@ -588,7 +718,7 @@ public sealed class MainWindow : Window
         {
             case ControlMode.Joystick:
                 if (_joystick != null) local = JoystickCommands();
-                else warn = "No joystick connected.";
+                else warn = "No joystick or gamepad - plug one in any time.";
                 break;
 
             case ControlMode.Slider:

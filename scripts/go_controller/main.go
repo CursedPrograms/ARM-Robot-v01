@@ -38,8 +38,12 @@ func main() {
 	}
 	if opts.ListJoysticks {
 		lines, err := describeJoysticks()
-		if err != nil || len(lines) == 0 {
+		if err != nil {
 			fmt.Printf("No joystick/controller devices found (%v).\n", err)
+			return
+		}
+		if len(lines) == 0 {
+			fmt.Println("No joystick/controller devices found.")
 			return
 		}
 		fmt.Printf("Found %d device(s):\n", len(lines))

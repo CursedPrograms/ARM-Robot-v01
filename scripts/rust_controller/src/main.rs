@@ -14,6 +14,7 @@ mod app;
 mod config;
 mod fleet;
 mod joystick;
+mod keys_window;
 mod kinematics;
 mod macros;
 mod options;
