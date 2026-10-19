@@ -29,7 +29,7 @@
 ---
 
 ### Software
-- [Arduino IDE](https://docs.arduino.cc/software/ide/)
+- [Arduino IDE](https://docs.arduino.cc/software/ide/): `scripts/arm` and `scripts/center_first_motor` are for the **Arduino UNO** and need the **Adafruit PWM Servo Driver Library** (Library Manager)
 
 ---
 
