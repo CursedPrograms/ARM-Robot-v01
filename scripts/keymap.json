@@ -103,6 +103,10 @@
      "every motor back to the rest pose"
     ],
     [
+     "Mind (button)",
+     "her LLM mind picks things up: a colour button, a click on the camera, or type what (Python controller)"
+    ],
+    [
      "1 - 9",
      "pick a macro"
     ],

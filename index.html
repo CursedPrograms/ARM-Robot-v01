@@ -22,6 +22,7 @@
     <a class="brand" href="#top">ARM</a>
     <ul>
       <li><a href="#overview">Overview</a></li>
+      <li><a href="#hardware">Hardware</a></li>
       <li><a href="#controls">Controls</a></li>
       <li><a href="#controllers">Controllers</a></li>
       <li><a href="#fleet">Fleet</a></li>
@@ -96,7 +97,52 @@
         <h4>One colour file</h4>
         <p>Every UI takes its colours from <code>colour_scheme.xml</code>. Edit it and restart, with no rebuild.</p>
       </div>
+      <div class="card">
+        <span class="k">Think</span>
+        <h4>Mind mode</h4>
+        <p>Her LLM mind moves her one joint at a time, thinking out loud and talking in her own dry, patient voice.</p>
+      </div>
+      <div class="card">
+        <span class="k">See</span>
+        <h4>She watches herself</h4>
+        <p>A webcam and a vision model. When she can&rsquo;t see her own arm she&rsquo;s very hesitant: one 3&deg; nudge at a time.</p>
+      </div>
+      <div class="card">
+        <span class="k">Pick</span>
+        <h4>Pick things up</h4>
+        <p>A colour button, a click on the live camera, or type what it is: she finds it and works out how to grab it.</p>
+      </div>
     </div>
+  </div>
+</section>
+
+<section id="hardware">
+  <div class="wrap">
+    <h2>Hardware</h2>
+    <h3 class="title">What she's built from</h3>
+    <ol class="parts">
+      <li><span class="n">01</span> Arduino Uno (<code>scripts/arm/arm.ino</code>, 115200 baud)</li>
+      <li><span class="n">02</span> PCA9685 16-channel PWM servo driver (I2C <code>0x40</code>, 50&nbsp;Hz)</li>
+      <li><span class="n">03</span> 6&times; 270&deg; servos (claw limited to 40&ndash;145&deg;)</li>
+      <li><span class="n">04</span> External 5&ndash;6&nbsp;V servo supply (to the PCA9685&rsquo;s V+)</li>
+      <li><span class="n">05</span> Passive buzzer (her voice in the fleet&rsquo;s conversations)</li>
+      <li><span class="n">06</span> USB webcam pointed at the arm (Mind mode)</li>
+    </ol>
+    <h3 class="sub">Wiring</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Signal</th><th>Connection</th></tr></thead>
+        <tbody>
+          <tr><td>PCA9685 SDA / SCL</td><td class="mono">Uno A4 / A5</td></tr>
+          <tr><td>PCA9685 VCC / GND</td><td class="mono">Uno 5&nbsp;V / GND</td></tr>
+          <tr><td>PCA9685 V+</td><td>External servo supply (share GND with the Uno)</td></tr>
+          <tr><td>Buzzer + / &minus;</td><td class="mono">Uno D8 / GND</td></tr>
+          <tr><td>Base / shoulder / elbow</td><td class="mono">PCA9685 ch 0 / 1 / 2</td></tr>
+          <tr><td>Wrist pitch / wrist roll / claw</td><td class="mono">PCA9685 ch 3 / 4 / 5</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Channels, limits, rest angles and directions live in <code>config.json</code>. Power the servos from their own supply, not the Uno&rsquo;s 5&nbsp;V pin.</p>
   </div>
 </section>
 

@@ -39,6 +39,7 @@ KEYMAP = [
         ("Space", "motor 6, claw: held = closed, released = open"),
         ("Shift + any of those", "1 degree steps, for fine positioning"),
         ("Home", "every motor back to the rest pose"),
+        ("Mind (button)", "her LLM mind picks things up: a colour button, a click on the camera, or type what (Python controller)"),
         ("1 - 9", "pick a macro"),
         ("F1", "this window"),
         ("Esc", "quit"),

@@ -54,6 +54,7 @@
 | Servos | 6× 270° servos (claw limited to 40–145°) |
 | Servo power | External 5–6 V supply to the PCA9685's V+ terminal (not the Uno's 5 V pin) |
 | Controllers | USB joystick, keyboard, phone / browser, RIFT |
+| Camera (Mind mode) | Any USB webcam pointed at the arm and the desk around it (`--camera N`) |
 
 ### Pinout
 
@@ -74,6 +75,19 @@ Channels, limits, rest angles and directions live in `config.json`.
 
 > [!NOTE]
 > The arm's link lengths in `config.json` (`geometry`) are still unmeasured placeholders, so IK mode can't be accurate yet. Measure them in millimetres and fill them in.
+
+---
+
+## Mind mode: she watches herself, and picks things up
+
+The **Mind** button (Python controller) hands the arm to her LLM mind: she looks, thinks out loud on screen, says what she's doing in her own voice (patient, dry, Zira slow and low), moves a joint, and remembers. Only on an x86 PC with 8 GB+ RAM and a GTX 1050 or better (`mind.py` checks), with Ollama's qwen3 (sized to the GPU) and a vision model (gemma3).
+
+- **She watches herself through a webcam** pointed at the arm (`--camera N`, default 0). The vision model lists what's in the picture and she decides from that list whether her arm is there. (Asked "is there a robot arm?", a small vision model says yes to a dark frame or an empty desk, so it's never asked that.)
+- **When she can't see herself she's very hesitant:** a dark, covered or blank picture, no camera, or no arm in what the model sees, and every move becomes one 3° nudge, whatever she planned, and she says why. Seeing herself, she moves in 10° steps.
+- **Pick something up:** choose what in the Mind panel: a **colour button** (red, orange, yellow, green, blue, purple), **click anything in the live camera preview** to take its colour, or **type what it is** in the text box (Enter). A colour is found with OpenCV in every frame and outlined in the preview; a typed thing is found in the vision model's list. Her mind gets where it is in the picture and how big, and a how-to (centre it with the base, open the claw, reach until it's big and low, close, lift), and works it out one move at a time.
+- Picking is new and needs tuning on the real arm: seeing the colour is reliable; getting the claw around it is the 4B model's job, and it's slow and clumsy at it.
+
+Requires `opencv-python` (in `requirements.txt`) and a USB webcam.
 
 ---
 
@@ -137,6 +151,7 @@ The same list opens in its own window: **F1** in any of the controllers (Python,
 | Space | motor 6, claw: held = closed, released = open |
 | Shift + any of those | 1 degree steps, for fine positioning |
 | Home | every motor back to the rest pose |
+| Mind (button) | her LLM mind picks things up: a colour button, a click on the camera, or type what (Python controller) |
 | 1 - 9 | pick a macro |
 | F1 | this window |
 | Esc | quit |

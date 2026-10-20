@@ -663,36 +663,141 @@ ARM_SAFETY = "every joint stops at its limits (config.json), and the claw only o
 MIND_STEP_DEG = 10        # one step of a move she can see
 MIND_BLIND_STEP_DEG = 3   # ...and when she can't see herself: one tiny nudge
 MIND_SETTLE_S = 0.6       # let the servos get there before she looks again
-# Neutral: never mention an arm. A small vision model asked "is there a robot arm?" says yes to a
-# dark frame or an empty desk (tested), so it only lists what it sees, and she decides from that.
+# Neutral: never mention an arm or the target. A small vision model asked "is there a robot arm?"
+# says yes to a dark frame or an empty desk (tested), so it only lists what it sees, with where, and
+# she decides from that list (does it name her? does it name what you asked her to pick up?).
 LOOK_QUESTION = (
-    "List the objects you can see in this picture, and describe the main one in a few words. "
-    'Answer JSON only: {"objects": ["..."], "main": "..."}'
+    "List the objects you can see in this picture, each with where it is in the picture and how big it "
+    "looks, and describe the main one in a few words. Answer JSON only: "
+    '{"objects": [{"name": "...", "x": "left|centre|right", "y": "top|middle|bottom", '
+    '"size": "small|medium|large"}], "main": "..."}'
 )
 ARM_WORDS = re.compile(r"\b(robot|robotic|arm|claw|gripper|servo|manipulator)s?\b", re.I)
 DARK_MEAN, FLAT_STD = 25, 8   # a frame darker / flatter than this can't show her (covered lens, blank wall)
 
+# What to pick up: a colour (OpenCV finds it in every frame: fast) or a thing by name (the vision
+# model's list). Picked in Mind mode: the colour buttons, a click on the camera preview (that
+# pixel's colour), or the text box.
+COLOURS = [("red", 0, (220, 50, 50)), ("orange", 12, (240, 140, 40)), ("yellow", 28, (230, 210, 40)),
+           ("green", 60, (60, 190, 80)), ("blue", 110, (60, 110, 230)), ("purple", 140, (160, 80, 200))]
+HUE_TOL, SAT_MIN, VAL_MIN = 10, 90, 60   # OpenCV hue 0-179: a colour is its hue +- HUE_TOL, vivid enough
+MIN_BLOB = 0.002                         # the smallest blob that counts, as a share of the picture
+STOP_WORDS = {"the", "a", "an", "and", "of", "that", "this", "thing", "object", "some", "my", "it"}
+HOW_TO_PICK = ("Turn the base until the target is in the centre, left to right. Open the claw. Lower the "
+               "shoulder and elbow towards it a little at a time; it gets bigger and lower in the picture as "
+               "the claw gets near. Close the claw around it, then lift the shoulder and check it came up "
+               "with you. Look again after every move.")
+
+
+def where_words(x, y):
+    """(0..1, 0..1) in the picture -> "left of centre, low"."""
+    lr = "left" if x < 0.4 else "right" if x > 0.6 else "centre"
+    ud = "high" if y < 0.4 else "low" if y > 0.6 else "middle"
+    return f"{lr}, {ud}"
+
+
+def find_colour(frame, hue):
+    """The biggest blob of `hue` in a BGR frame: {"seen", "where", "x_pct", "y_pct", "size_pct", "box"}."""
+    import cv2
+    import numpy as np
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    lo, hi = hue - HUE_TOL, hue + HUE_TOL
+    mask = cv2.inRange(hsv, np.array([max(lo, 0), SAT_MIN, VAL_MIN]), np.array([min(hi, 179), 255, 255]))
+    if lo < 0:      # red wraps round 0 / 179
+        mask |= cv2.inRange(hsv, np.array([180 + lo, SAT_MIN, VAL_MIN]), np.array([179, 255, 255]))
+    if hi > 179:
+        mask |= cv2.inRange(hsv, np.array([0, SAT_MIN, VAL_MIN]), np.array([hi - 180, 255, 255]))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    h, w = frame.shape[:2]
+    if not contours:
+        return {"seen": False}
+    c = max(contours, key=cv2.contourArea)
+    share = cv2.contourArea(c) / (w * h)
+    if share < MIN_BLOB:
+        return {"seen": False}
+    bx, by, bw, bh = cv2.boundingRect(c)
+    x, y = (bx + bw / 2) / w, (by + bh / 2) / h
+    return {"seen": True, "where": where_words(x, y), "x_pct": round(x * 100), "y_pct": round(y * 100),
+            "size_pct": round(share * 100, 1), "box": (bx, by, bw, bh)}
+
+
+def stem(word):
+    """wires / wiring -> wir, motors -> motor, cups -> cup: so a typed word matches the model's."""
+    for suffix in ("ing", "es", "ed", "s"):
+        if len(word) > len(suffix) + 2 and word.endswith(suffix):
+            return word[: -len(suffix)]
+    return word
+
+
+def find_thing(view, text):
+    """The thing you typed, in the vision model's list (one of its words in an object's name), or not seen."""
+    words = {stem(w) for w in re.findall(r"[a-z]+", text.lower()) if len(w) > 2 and w not in STOP_WORDS}
+    for o in view.get("objects", []):
+        name = (o.get("name", "") if isinstance(o, dict) else str(o)).lower()
+        if words & {stem(t) for t in re.findall(r"[a-z]+", name)}:
+            out = {"seen": True, "called": name}
+            if isinstance(o, dict):
+                out.update({k: o[k] for k in ("x", "y", "size") if k in o})
+            return out
+    return {"seen": False}
+
+
+def hue_at(frame, fx, fy):
+    """The hue of a pixel (fx, fy) of a BGR frame, from a small patch around it."""
+    import cv2
+    h, w = frame.shape[:2]
+    x0, y0 = max(0, fx - 3), max(0, fy - 3)
+    patch = cv2.cvtColor(frame[y0:min(h, fy + 4), x0:min(w, fx + 4)], cv2.COLOR_BGR2HSV)
+    return int(patch[:, :, 0].mean()), int(patch[:, :, 1].mean())
+
 
 class ArmEyes:
-    """The webcam that watches the arm, opened when the mind starts. snapshot() -> JPEG bytes or None."""
+    """The webcam that watches the arm: a background thread keeps the latest frame while Mind mode is
+    open (the preview, the colour finder), snapshot() gives the vision model a JPEG of it."""
 
     def __init__(self, index):
         self.index = index
         self.cap = None
         self.error = ""
+        self._frame = None
+        self._lock = threading.Lock()
+        self._running = False
 
-    def snapshot(self):
+    def start(self):
+        if self._running:
+            return
         try:
             import cv2
         except ImportError:
             self.error = "no OpenCV (pip install opencv-python)"
-            return None
-        if self.cap is None:
-            self.cap = cv2.VideoCapture(self.index)
-        for _ in range(3):   # the first frames after opening can be dark or stale
+            return
+        self.cap = cv2.VideoCapture(self.index)
+        self._running = True
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self):
+        while self._running:
             ok, frame = self.cap.read()
-        if not ok:
-            self.error = f"camera {self.index} gives no picture"
+            if ok:
+                with self._lock:
+                    self._frame = frame
+            else:
+                self.error = f"camera {self.index} gives no picture"
+                time.sleep(0.5)
+            time.sleep(0.05)
+
+    def latest(self):
+        """The latest frame (BGR, a copy), or None."""
+        with self._lock:
+            return None if self._frame is None else self._frame.copy()
+
+    def snapshot(self, frame=None):
+        """A JPEG of `frame` (default: the latest) for the vision model, None if there's nothing to see."""
+        import cv2
+        frame = self.latest() if frame is None else frame
+        if frame is None:
+            self.error = self.error or f"camera {self.index}: no picture yet"
             return None
         grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         if grey.mean() < DARK_MEAN or grey.std() < FLAT_STD:   # nothing a vision model could see in
@@ -703,7 +808,9 @@ class ArmEyes:
         return jpeg.tobytes() if ok else None
 
     def close(self):
+        self._running = False
         if self.cap is not None:
+            time.sleep(0.1)
             self.cap.release()
             self.cap = None
 
@@ -724,39 +831,92 @@ def wrap(text, font, width):
     return lines
 
 
-def draw_mind(screen, font, small_font, arm_mind, seen, eyes, mind_state):
-    """Mind mode's panel: whether she can think here, whether she sees herself, what she said and thinks."""
-    x, y, w = 20, MARGIN_TOP - 30, WINDOW_WIDTH - 40
+PREVIEW_W, PREVIEW_H = 200, 150
+
+
+def draw_mind(screen, font, small_font, arm_mind, seen, eyes, mind_state, target, text_box):
+    """Mind mode's panel: what to pick up (colour buttons, a text box, the live camera with the target
+    outlined), whether she sees herself, what she said and thinks. Returns the clickable rects."""
+    import pygame
+    x, y = 20, MARGIN_TOP - 30
+    hits = {"colours": [], "text": None, "preview": None}
     if not mind_state["capable"]:
         screen.blit(small_font.render(f"Mind: not on this PC - {mind_state['why']}", True, WARN_COLOR), (x, y))
-        return
-    sees = "I can see myself" if seen["visible"] else ("I CAN'T see myself - very hesitant"
-                                                       + (f" ({eyes.error})" if eyes.error else ""))
-    screen.blit(small_font.render(f"Mind: {arm_mind.state}  |  {sees}", True,
-                                  TEXT_COLOR if seen["visible"] else WARN_COLOR), (x, y))
-    y += 22
-    screen.blit(small_font.render(mind_state["why"], True, STATUS_COLOR), (x, y))
-    y += 22
+        return hits
+    # what to pick up: six colours and a text box
+    for i, (name, hue, rgb_) in enumerate(COLOURS):
+        r = pygame.Rect(x + i * 40, y, 34, 24)
+        pygame.draw.rect(screen, rgb_, r, border_radius=5)
+        if target["kind"] == "colour" and target["name"] == name:
+            pygame.draw.rect(screen, TEXT_COLOR, r, width=3, border_radius=5)
+        hits["colours"].append((r, name, hue))
+    tr = pygame.Rect(x + 250, y, WINDOW_WIDTH - 20 - (x + 250), 24)
+    pygame.draw.rect(screen, BUTTON_COLOR, tr, border_radius=5)
+    pygame.draw.rect(screen, BUTTON_ACTIVE_COLOR if text_box["focus"] else BUTTON_HOVER_COLOR, tr, width=2, border_radius=5)
+    shown = text_box["text"] + ("|" if text_box["focus"] else "") if (text_box["focus"] or text_box["text"]) \
+        else "or type what to pick up, Enter"
+    screen.blit(small_font.render(shown[-34:], True, TEXT_COLOR if text_box["text"] or text_box["focus"] else STATUS_COLOR),
+                (tr.x + 6, tr.y + 5))
+    hits["text"] = tr
+    y += 32
+
+    # the live camera, the target outlined; click it to pick that colour
+    pr = pygame.Rect(WINDOW_WIDTH - 20 - PREVIEW_W, y, PREVIEW_W, PREVIEW_H)
+    frame = eyes.latest()
+    if frame is not None:
+        import cv2
+        small = cv2.cvtColor(cv2.resize(frame, (PREVIEW_W, PREVIEW_H)), cv2.COLOR_BGR2RGB)
+        screen.blit(pygame.image.frombuffer(small.tobytes(), (PREVIEW_W, PREVIEW_H), "RGB"), pr.topleft)
+        box = target.get("box")
+        if box and target["kind"] == "colour":
+            h, w = frame.shape[:2]
+            bx, by, bw, bh = box
+            pygame.draw.rect(screen, TEXT_COLOR, pygame.Rect(pr.x + bx * PREVIEW_W // w, pr.y + by * PREVIEW_H // h,
+                                                             max(4, bw * PREVIEW_W // w), max(4, bh * PREVIEW_H // h)), 2)
+        hits["preview"] = pr
+    else:
+        pygame.draw.rect(screen, BUTTON_COLOR, pr)
+        screen.blit(small_font.render(eyes.error or "camera starting...", True, WARN_COLOR), (pr.x + 6, pr.y + 6))
+    found = target.get("found")
+    label = f"target: {target['name']}" + ("" if found is None else (" - seen" if found else " - not seen"))
+    screen.blit(small_font.render(label, True, TEXT_COLOR if found else STATUS_COLOR), (pr.x, pr.bottom + 4))
+
+    # the mind, left of the camera
+    w = pr.x - x - 10
+    sees = "I see myself" if seen["visible"] else "I CAN'T see myself: very hesitant"
+    screen.blit(small_font.render(f"Mind: {arm_mind.state}", True, TEXT_COLOR), (x, y))
+    y += 18
+    screen.blit(small_font.render(sees, True, TEXT_COLOR if seen["visible"] else WARN_COLOR), (x, y))
+    y += 20
     if arm_mind.said:
         for line in wrap(f'ARM: "{arm_mind.said}"', font, w)[:3]:
             screen.blit(font.render(line, True, TEXT_COLOR), (x, y))
-            y += 24
+            y += 22
     if arm_mind.last:
         for line in wrap(f"last: {arm_mind.last}", small_font, w)[:2]:
             screen.blit(small_font.render(line, True, STATUS_COLOR), (x, y))
-            y += 18
+            y += 16
     if arm_mind.error:
-        screen.blit(small_font.render(f"! {arm_mind.error}", True, WARN_COLOR), (x, y))
-        y += 18
-    thoughts = wrap(arm_mind.thinking.strip(), small_font, w) if arm_mind.thinking.strip() else []
-    room = max(0, (WINDOW_HEIGHT - 10 - y) // 17)
+        screen.blit(small_font.render(f"! {arm_mind.error}"[:60], True, WARN_COLOR), (x, y))
+        y += 16
+    y = max(y, pr.bottom + 24)   # the thoughts, under both
+    thoughts = wrap(arm_mind.thinking.strip(), small_font, WINDOW_WIDTH - 40) if arm_mind.thinking.strip() else []
+    room = max(0, (WINDOW_HEIGHT - 10 - y) // 16)
     for line in thoughts[-room:] if room else []:
         screen.blit(small_font.render(line, True, STATUS_COLOR), (x, y))
-        y += 17
+        y += 16
+    return hits
 
 
-def arm_body(eyes, motors, fleet_state, fleet_lock, step_motor, set_claw, set_shared):
-    """mind.Mind's look / act for ARM, and `seen` (does she see herself right now)."""
+def pick_goal(target):
+    what = f"the {target['name']} object" if target["kind"] == "colour" else target["name"]
+    return f"pick up {what} you can see, lift it, and tell me how it went"
+
+
+def arm_body(eyes, motors, fleet_state, fleet_lock, step_motor, set_claw, set_shared, target):
+    """mind.Mind's look / act for ARM, and `seen` (does she see herself right now). `target` is what
+    to pick up ({"kind": "colour", "name", "hue"} or {"kind": "thing", "name"}); look() writes what
+    it found back into it (found, box) for the preview."""
     seen = {"visible": False}
 
     def claw_closed(angles):
@@ -767,19 +927,31 @@ def arm_body(eyes, motors, fleet_state, fleet_lock, step_motor, set_claw, set_sh
     def look():
         with fleet_lock:
             angles = dict(fleet_state["angles"])
-        jpeg = eyes.snapshot()
+        frame = eyes.latest()
+        jpeg = eyes.snapshot(frame) if frame is not None else None
         if jpeg:
             view = mind.see(jpeg, LOOK_QUESTION)
-            said = " ".join(str(o) for o in view.get("objects", [])) + " " + str(view.get("main", view.get("answer", "")))
-            view["arm_visible"] = bool(ARM_WORDS.search(said))
+            names = [o.get("name", "") if isinstance(o, dict) else str(o) for o in view.get("objects", [])]
+            view["arm_visible"] = bool(ARM_WORDS.search(" ".join(names) + " " + str(view.get("main", view.get("answer", "")))))
         else:
             view = {"arm_visible": False, "error": eyes.error}
         seen["visible"] = view["arm_visible"]
+
+        if target["kind"] == "colour":
+            found = find_colour(frame, target["hue"]) if jpeg else {"seen": False}
+            target["box"] = found.pop("box", None)
+        else:
+            found = find_thing(view, target["name"]) if jpeg else {"seen": False}
+            target["box"] = None
+        target["found"] = found["seen"]
+
         names = {1: "base", 2: "shoulder", 3: "elbow", 4: "wrist", 5: "wrist_roll"}
         senses = {
             "joints_deg": {names[n]: f"{angles[n]} (limits {motors[n]['min']}-{motors[n]['max']})" for n in names},
             "claw": "closed" if claw_closed(angles) else "open",
-            "camera": view,
+            "camera_sees": view,
+            "target": dict(found, what=target["name"]),
+            "how_to_pick": HOW_TO_PICK,
         }
         if not seen["visible"]:
             senses["warning"] = ("You can't see your own arm, so you don't know where it is or what's around "
@@ -1005,7 +1177,17 @@ def main():
     def macro_row_rect(i):
         return pygame.Rect(30, MACRO_LIST_Y + i * MACRO_ROW_H, 500, MACRO_ROW_H)
 
-    look, act, seen = arm_body(eyes, motors, fleet_state, fleet_lock, step_motor, set_claw, set_shared)
+    # what she picks up (Mind mode): a colour, or a thing you type
+    target = {"kind": "colour", "name": "red", "hue": 0}
+    text_box = {"focus": False, "text": ""}
+    mind_hits = {"colours": [], "text": None, "preview": None}
+
+    def set_target(**t):
+        target.clear()
+        target.update(t)
+        arm_mind.goal = pick_goal(target)   # she picks it up from her next thought on
+
+    look, act, seen = arm_body(eyes, motors, fleet_state, fleet_lock, step_motor, set_claw, set_shared, target)
     arm_mind = mind.Mind("ARM", ARM_PERSONA, ARM_MOVES, look, act, voice=ARM_VOICE[0], rate=ARM_VOICE[1],
                          pitch=ARM_VOICE[2], safety=ARM_SAFETY)
 
@@ -1013,6 +1195,41 @@ def main():
     try:
         while running:
             for event in pygame.event.get():
+                # typing what to pick up: the text box has the keys while it's focused
+                if text_box["focus"] and event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_RETURN:
+                        text_box["focus"] = False
+                        if text_box["text"].strip():
+                            set_target(kind="thing", name=text_box["text"].strip())
+                    elif event.key == pygame.K_ESCAPE:
+                        text_box["focus"] = False
+                    elif event.key == pygame.K_BACKSPACE:
+                        text_box["text"] = text_box["text"][:-1]
+                    elif event.unicode and event.unicode.isprintable() and len(text_box["text"]) < 40:
+                        text_box["text"] += event.unicode
+                    continue
+                if mode == "mind" and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    pos = event.pos
+                    picked = next(((n, h) for r, n, h in mind_hits["colours"] if r.collidepoint(pos)), None)
+                    if picked:
+                        set_target(kind="colour", name=picked[0], hue=picked[1])
+                        text_box["focus"] = False
+                        continue
+                    if mind_hits["text"] and mind_hits["text"].collidepoint(pos):
+                        text_box["focus"] = True
+                        continue
+                    if mind_hits["preview"] and mind_hits["preview"].collidepoint(pos):
+                        frame = eyes.latest()   # that pixel's colour becomes the target
+                        if frame is not None:
+                            fh, fw = frame.shape[:2]
+                            fx = (pos[0] - mind_hits["preview"].x) * fw // PREVIEW_W
+                            fy = (pos[1] - mind_hits["preview"].y) * fh // PREVIEW_H
+                            hue, sat = hue_at(frame, fx, fy)
+                            if sat >= SAT_MIN:
+                                set_target(kind="colour", name=f"picked (hue {hue})", hue=hue)
+                            else:
+                                status = "That spot is too grey to follow by colour - pick something more colourful."
+                        continue
                 if event.type == pygame.QUIT:
                     running = False
                 elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
@@ -1098,9 +1315,13 @@ def main():
                             s.handle_event(event)
 
             # ---- her mind thinks only in Mind mode, and never while a macro plays ----
+            if mode == "mind":
+                eyes.start()        # the camera runs while Mind mode is open (preview, colour finder)
+            elif eyes._running:
+                eyes.close()
             want_mind = mode == "mind" and not playing and adopted and mind_state["capable"]
             if want_mind and not arm_mind.on:
-                arm_mind.start(goal="look at yourself, find out where your claw is, and tidy your pose")
+                arm_mind.start(goal=pick_goal(target))
             elif not want_mind and arm_mind.on:
                 arm_mind.stop()
 
@@ -1249,7 +1470,7 @@ def main():
                         y += 28
 
             elif mode == "mind":
-                draw_mind(screen, font, small_font, arm_mind, seen, eyes, mind_state)
+                mind_hits = draw_mind(screen, font, small_font, arm_mind, seen, eyes, mind_state, target, text_box)
 
             if playing:
                 screen.blit(small_font.render(f"Playing... step {play_index}/{len(play_steps)}", True, STATUS_COLOR),
