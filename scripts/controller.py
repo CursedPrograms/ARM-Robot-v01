@@ -53,6 +53,7 @@ Usage:
 import os
 import argparse
 import json
+import re
 import socket
 import sys
 import threading
@@ -76,6 +77,7 @@ from motor_config import load_motor_config, load_geometry
 from colour_scheme import rgb
 from board_id import identify_ports
 from IK_controller import inverse_kinematics
+import mind   # scripts/mind.py: her LLM mind (Mind mode), the same file in every controller
 
 MACROS_DIR = Path(__file__).resolve().parent / "macros"
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -631,6 +633,190 @@ def round_avatar(path, size):
     return out
 
 
+# ---------------------------------------------------------------------------
+# ARM's mind (mind.py): the Mind mode. She watches herself through a camera (--camera, the
+# webcam pointed at the arm) and the vision model tells her what it sees. When she can't see
+# her own arm she is very hesitant: one tiny nudge at a time, and she says why.
+# ---------------------------------------------------------------------------
+ARM_PERSONA = (
+    "You're a six-axis robot arm on a desk, built by Cursed Entertainment: patient, precise and a "
+    "little philosophical, with a dry sense of humour. You can't walk anywhere (the others love "
+    "reminding you), so you know your own small world very well. You only trust what you can see: "
+    "when the camera doesn't show you your own arm, you get nervous and move as little as you can. "
+    "You belong to the DREAM Robotics fleet: NORA is the boss, WHIP is a show-off, MILA and NIKA are "
+    "the little tanks, the KIDAs watch everything."
+)
+ARM_MOVES = {
+    "base_left": "turn the whole arm left at the base", "base_right": "turn it right",
+    "shoulder_up": "lift the shoulder", "shoulder_down": "lower the shoulder",
+    "elbow_up": "lift the elbow", "elbow_down": "lower the elbow",
+    "wrist_up": "tilt the wrist up", "wrist_down": "tilt the wrist down",
+    "roll_left": "roll the wrist left", "roll_right": "roll the wrist right",
+    "claw_open": "open the claw", "claw_close": "close the claw",
+    "rest": "go back to the rest pose, slowly",
+}
+ARM_MOVE_JOINTS = {"base_left": (1, -1), "base_right": (1, 1), "shoulder_up": (2, 1), "shoulder_down": (2, -1),
+                   "elbow_up": (3, 1), "elbow_down": (3, -1), "wrist_up": (4, 1), "wrist_down": (4, -1),
+                   "roll_left": (5, -1), "roll_right": (5, 1)}
+ARM_VOICE = ("Microsoft Zira Desktop", -2, "low")   # she: slow and low (robot-voices-genders)
+ARM_SAFETY = "every joint stops at its limits (config.json), and the claw only opens or closes"
+MIND_STEP_DEG = 10        # one step of a move she can see
+MIND_BLIND_STEP_DEG = 3   # ...and when she can't see herself: one tiny nudge
+MIND_SETTLE_S = 0.6       # let the servos get there before she looks again
+# Neutral: never mention an arm. A small vision model asked "is there a robot arm?" says yes to a
+# dark frame or an empty desk (tested), so it only lists what it sees, and she decides from that.
+LOOK_QUESTION = (
+    "List the objects you can see in this picture, and describe the main one in a few words. "
+    'Answer JSON only: {"objects": ["..."], "main": "..."}'
+)
+ARM_WORDS = re.compile(r"\b(robot|robotic|arm|claw|gripper|servo|manipulator)s?\b", re.I)
+DARK_MEAN, FLAT_STD = 25, 8   # a frame darker / flatter than this can't show her (covered lens, blank wall)
+
+
+class ArmEyes:
+    """The webcam that watches the arm, opened when the mind starts. snapshot() -> JPEG bytes or None."""
+
+    def __init__(self, index):
+        self.index = index
+        self.cap = None
+        self.error = ""
+
+    def snapshot(self):
+        try:
+            import cv2
+        except ImportError:
+            self.error = "no OpenCV (pip install opencv-python)"
+            return None
+        if self.cap is None:
+            self.cap = cv2.VideoCapture(self.index)
+        for _ in range(3):   # the first frames after opening can be dark or stale
+            ok, frame = self.cap.read()
+        if not ok:
+            self.error = f"camera {self.index} gives no picture"
+            return None
+        grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if grey.mean() < DARK_MEAN or grey.std() < FLAT_STD:   # nothing a vision model could see in
+            self.error = "the picture is too dark or blank"
+            return None
+        self.error = ""
+        ok, jpeg = cv2.imencode(".jpg", cv2.resize(frame, (640, 480)), [cv2.IMWRITE_JPEG_QUALITY, 80])
+        return jpeg.tobytes() if ok else None
+
+    def close(self):
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
+
+
+def wrap(text, font, width):
+    lines = []
+    for para in text.split("\n"):
+        line = ""
+        for word in para.split(" "):
+            test = (line + " " + word).strip()
+            if font.size(test)[0] <= width:
+                line = test
+            else:
+                if line:
+                    lines.append(line)
+                line = word
+        lines.append(line)
+    return lines
+
+
+def draw_mind(screen, font, small_font, arm_mind, seen, eyes, mind_state):
+    """Mind mode's panel: whether she can think here, whether she sees herself, what she said and thinks."""
+    x, y, w = 20, MARGIN_TOP - 30, WINDOW_WIDTH - 40
+    if not mind_state["capable"]:
+        screen.blit(small_font.render(f"Mind: not on this PC - {mind_state['why']}", True, WARN_COLOR), (x, y))
+        return
+    sees = "I can see myself" if seen["visible"] else ("I CAN'T see myself - very hesitant"
+                                                       + (f" ({eyes.error})" if eyes.error else ""))
+    screen.blit(small_font.render(f"Mind: {arm_mind.state}  |  {sees}", True,
+                                  TEXT_COLOR if seen["visible"] else WARN_COLOR), (x, y))
+    y += 22
+    screen.blit(small_font.render(mind_state["why"], True, STATUS_COLOR), (x, y))
+    y += 22
+    if arm_mind.said:
+        for line in wrap(f'ARM: "{arm_mind.said}"', font, w)[:3]:
+            screen.blit(font.render(line, True, TEXT_COLOR), (x, y))
+            y += 24
+    if arm_mind.last:
+        for line in wrap(f"last: {arm_mind.last}", small_font, w)[:2]:
+            screen.blit(small_font.render(line, True, STATUS_COLOR), (x, y))
+            y += 18
+    if arm_mind.error:
+        screen.blit(small_font.render(f"! {arm_mind.error}", True, WARN_COLOR), (x, y))
+        y += 18
+    thoughts = wrap(arm_mind.thinking.strip(), small_font, w) if arm_mind.thinking.strip() else []
+    room = max(0, (WINDOW_HEIGHT - 10 - y) // 17)
+    for line in thoughts[-room:] if room else []:
+        screen.blit(small_font.render(line, True, STATUS_COLOR), (x, y))
+        y += 17
+
+
+def arm_body(eyes, motors, fleet_state, fleet_lock, step_motor, set_claw, set_shared):
+    """mind.Mind's look / act for ARM, and `seen` (does she see herself right now)."""
+    seen = {"visible": False}
+
+    def claw_closed(angles):
+        m = motors[6]
+        closed_at = m["min"] if m["invert"] else m["max"]
+        return abs(angles[6] - closed_at) < abs(angles[6] - (m["max"] + m["min"] - closed_at))
+
+    def look():
+        with fleet_lock:
+            angles = dict(fleet_state["angles"])
+        jpeg = eyes.snapshot()
+        if jpeg:
+            view = mind.see(jpeg, LOOK_QUESTION)
+            said = " ".join(str(o) for o in view.get("objects", [])) + " " + str(view.get("main", view.get("answer", "")))
+            view["arm_visible"] = bool(ARM_WORDS.search(said))
+        else:
+            view = {"arm_visible": False, "error": eyes.error}
+        seen["visible"] = view["arm_visible"]
+        names = {1: "base", 2: "shoulder", 3: "elbow", 4: "wrist", 5: "wrist_roll"}
+        senses = {
+            "joints_deg": {names[n]: f"{angles[n]} (limits {motors[n]['min']}-{motors[n]['max']})" for n in names},
+            "claw": "closed" if claw_closed(angles) else "open",
+            "camera": view,
+        }
+        if not seen["visible"]:
+            senses["warning"] = ("You can't see your own arm, so you don't know where it is or what's around "
+                                 "it. Be very hesitant: one tiny nudge at most, or stay still and say why.")
+        return senses
+
+    def act(move, steps):
+        if move == "stop":
+            return {"ok": True}
+        blind = not seen["visible"]
+        steps = 1 if blind else steps
+        deg = MIND_BLIND_STEP_DEG if blind else MIND_STEP_DEG
+        if move == "rest":
+            set_shared({n: motors[n]["rest"] for n in motors})
+        elif move in ("claw_open", "claw_close"):
+            set_claw(move == "claw_close")
+        elif move in ARM_MOVE_JOINTS:
+            n, direction = ARM_MOVE_JOINTS[move]
+            for _ in range(steps):
+                step_motor(n, direction, deg)
+                time.sleep(0.15)
+        time.sleep(MIND_SETTLE_S)
+        with fleet_lock:
+            angles = dict(fleet_state["angles"])
+        out = {"ok": True, "deg_per_step": deg, "steps": steps}
+        if blind:
+            out["note"] = "I couldn't see myself, so I only nudged"
+        if move in ARM_MOVE_JOINTS:
+            n = ARM_MOVE_JOINTS[move][0]
+            out["joint_now_deg"] = angles[n]
+            if angles[n] in (motors[n]["min"], motors[n]["max"]):
+                out["at_limit"] = True
+        return out
+
+    return look, act, seen
+
+
 def main():
     parser = argparse.ArgumentParser(description="Unified joystick/slider/IK arm controller with macro recording, over USB serial.")
     parser.add_argument("--device", type=int, default=None, help="Joystick index to use (default: a joystick first, else a gamepad)")
@@ -649,6 +835,7 @@ def main():
     parser.add_argument("--no-register", action="store_true", help="Fleet mode: don't heartbeat to the fleet registry, just serve the HTTP API")
     parser.add_argument("--ladder", action="store_true",
                     help="join / host the fleet's WiFi (fleet_ladder.py; FLEET_LADDER=1 does the same)")
+    parser.add_argument("--camera", type=int, default=0, help="Mind mode: the webcam that watches the arm (default 0)")
     args = parser.parse_args()
     global LADDER
     from fleet_ladder import FleetLadder   # the fleet's WiFi ladder (fleet TODO, section 2)
@@ -759,11 +946,20 @@ def main():
                 prev_local[n] = sl.angle
 
     mode_buttons = {
-        "joystick": Button((20, MODE_BUTTON_Y, 122, 34), "Joystick"),
-        "slider": Button((152, MODE_BUTTON_Y, 122, 34), "Sliders"),
-        "ik": Button((284, MODE_BUTTON_Y, 122, 34), "IK"),
-        "fleet": Button((416, MODE_BUTTON_Y, 122, 34), "Fleet"),
+        "joystick": Button((20, MODE_BUTTON_Y, 98, 34), "Joystick"),
+        "slider": Button((124, MODE_BUTTON_Y, 98, 34), "Sliders"),
+        "ik": Button((228, MODE_BUTTON_Y, 98, 34), "IK"),
+        "fleet": Button((332, MODE_BUTTON_Y, 98, 34), "Fleet"),
+        "mind": Button((436, MODE_BUTTON_Y, 98, 34), "Mind"),
     }
+
+    # Her mind: only where it can run (mind.can_think(): an x86 PC with a GPU), with her camera
+    eyes = ArmEyes(args.camera)
+    mind_state = {"capable": False, "why": "checking this PC..."}
+
+    def check_mind():
+        mind_state["capable"], mind_state["why"] = mind.can_think()
+    threading.Thread(target=check_mind, daemon=True).start()
     record_button = Button((30, TRANSPORT_BUTTON_Y, 160, 30), "Record")
     play_button = Button((200, TRANSPORT_BUTTON_Y, 160, 30), "Play")
     elbow_toggle = Button((30, MARGIN_TOP + 5 * ROW_HEIGHT, 150, 30), "Elbow: Up")
@@ -809,6 +1005,10 @@ def main():
     def macro_row_rect(i):
         return pygame.Rect(30, MACRO_LIST_Y + i * MACRO_ROW_H, 500, MACRO_ROW_H)
 
+    look, act, seen = arm_body(eyes, motors, fleet_state, fleet_lock, step_motor, set_claw, set_shared)
+    arm_mind = mind.Mind("ARM", ARM_PERSONA, ARM_MOVES, look, act, voice=ARM_VOICE[0], rate=ARM_VOICE[1],
+                         pitch=ARM_VOICE[2], safety=ARM_SAFETY)
+
     running = True
     try:
         while running:
@@ -846,6 +1046,8 @@ def main():
                         elif mode_buttons["fleet"].hit(pos):
                             mode = "fleet"
                             ensure_fleet_started()
+                        elif mode_buttons["mind"].hit(pos) and mind_state["capable"]:
+                            mode = "mind"
                         elif record_button.hit(pos):
                             if not recording:
                                 recording = True
@@ -894,6 +1096,13 @@ def main():
                     elif mode == "ik":
                         for s in ik_sliders.values():
                             s.handle_event(event)
+
+            # ---- her mind thinks only in Mind mode, and never while a macro plays ----
+            want_mind = mode == "mind" and not playing and adopted and mind_state["capable"]
+            if want_mind and not arm_mind.on:
+                arm_mind.start(goal="look at yourself, find out where your claw is, and tidy your pose")
+            elif not want_mind and arm_mind.on:
+                arm_mind.stop()
 
             # ---- compute + send this frame's commands ----
             if playing:
@@ -1039,6 +1248,9 @@ def main():
                         screen.blit(font.render(f"Motor {n} (ch {m['channel']}): {ang}", True, TEXT_COLOR), (20, y))
                         y += 28
 
+            elif mode == "mind":
+                draw_mind(screen, font, small_font, arm_mind, seen, eyes, mind_state)
+
             if playing:
                 screen.blit(small_font.render(f"Playing... step {play_index}/{len(play_steps)}", True, STATUS_COLOR),
                             (370, TRANSPORT_BUTTON_Y + 8))
@@ -1046,6 +1258,9 @@ def main():
             pygame.display.flip()
             clock.tick(args.rate if args.rate > 0 else 30)
     finally:
+        if arm_mind.on:
+            arm_mind.stop()
+        eyes.close()
         if remote is not None:
             remote.close()
         if ser is not None:

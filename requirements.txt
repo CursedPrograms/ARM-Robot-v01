@@ -2,3 +2,4 @@ pygame
 pyserial
 flask
 requests
+opencv-python   # Mind mode: the camera that watches the arm
