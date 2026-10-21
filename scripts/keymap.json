@@ -6,15 +6,15 @@
    "keys": [
     [
      "Stick left / right (axis 0)",
-     "motor 1, base: follows the stick, centred = rest"
+     "motor 1, base"
     ],
     [
      "Stick forward / back (axis 1)",
-     "motor 2, shoulder: follows the stick, centred = rest"
+     "motor 2, shoulder"
     ],
     [
      "Twist (axis 2)",
-     "motor 5, wrist roll: follows the stick, centred = rest"
+     "motor 5, wrist roll"
     ],
     [
      "Hat up / down",
@@ -26,7 +26,11 @@
     ],
     [
      "Trigger (button 0)",
-     "motor 6, claw: held = closed, released = open"
+     "motor 6, claw: a click closes / opens it (Hold position), or held = closed"
+    ],
+    [
+     "Hold position (tick box)",
+     "ticked: the stick sets speed and letting go holds her where she is; unticked: the stick sets position and letting go sends her back to rest one joint at a time, wrist roll first (Python and C++ controllers; the others: centred = rest)"
     ],
     [
      "",
@@ -59,7 +63,7 @@
     ],
     [
      "A (0)",
-     "motor 6, claw: held = closed, released = open"
+     "motor 6, claw: like the trigger"
     ],
     [
      "",

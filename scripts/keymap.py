@@ -13,12 +13,16 @@ TITLE = "ARM - controls"
 
 KEYMAP = [
     ("Joystick (Joystick mode)", [
-        ("Stick left / right (axis 0)", "motor 1, base: follows the stick, centred = rest"),
-        ("Stick forward / back (axis 1)", "motor 2, shoulder: follows the stick, centred = rest"),
-        ("Twist (axis 2)", "motor 5, wrist roll: follows the stick, centred = rest"),
+        ("Stick left / right (axis 0)", "motor 1, base"),
+        ("Stick forward / back (axis 1)", "motor 2, shoulder"),
+        ("Twist (axis 2)", "motor 5, wrist roll"),
         ("Hat up / down", "motor 3, elbow: 5 degrees a press"),
         ("Button 3 / button 2", "motor 4, wrist pitch: 5 degrees a press"),
-        ("Trigger (button 0)", "motor 6, claw: held = closed, released = open"),
+        ("Trigger (button 0)", "motor 6, claw: a click closes / opens it (Hold position), or held = closed"),
+        ("Hold position (tick box)", "ticked: the stick sets speed and letting go holds her where she is; "
+                                     "unticked: the stick sets position and letting go sends her back to rest "
+                                     "one joint at a time, wrist roll first (Python and C++ controllers; "
+                                     "the others: centred = rest)"),
         ("", "a held hat direction or button is one press; motors 3 and 4 stay where you stepped them"),
         ("", "every motor stays inside its min / max from config.json; invert flips its direction"),
     ]),
@@ -27,7 +31,7 @@ KEYMAP = [
         ("Right stick across", "motor 5, wrist roll"),
         ("D-pad up / down", "motor 3, elbow: 5 degrees a press"),
         ("Y (3) / X (2)", "motor 4, wrist pitch: 5 degrees a press"),
-        ("A (0)", "motor 6, claw: held = closed, released = open"),
+        ("A (0)", "motor 6, claw: like the trigger"),
         ("", "a joystick always wins over a gamepad; plug either in any time"),
     ]),
     ("Keyboard (every mode except IK; click the window first)", [

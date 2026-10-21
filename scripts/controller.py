@@ -11,7 +11,11 @@ Modes (click the buttons, or the Joystick/Sliders/IK mode is picked with
         Hat 0 Y -> Motor 3 (elbow), Buttons 2/3 -> Motor 4 (wrist),
         Axis 2 -> Motor 5 (wrist roll), Button 0 (trigger) -> Motor 6 (claw)
         The hat and buttons 2/3 move their motor BUTTON_STEP_DEG (5) degrees per
-        press. The claw has only two states: trigger held = closed, released = open.
+        press. The "Hold position" tick box picks what the stick does: ticked, it
+        sets speed, letting go holds her where she is and the trigger clicks the
+        claw shut/open; unticked, it sets position, letting go sends her back to
+        rest one joint at a time (nearest the claw first) and the claw is closed
+        while the trigger's held. No joint ever jumps (StickDriver).
     Keyboard - works in every mode except IK (see README "Controls"):
         A/D base, W/S shoulder, R/F elbow, T/G wrist pitch, Q/E wrist roll:
         5 degrees per press (hold to repeat, Shift for 1 degree).
@@ -93,6 +97,18 @@ BUTTON_MOTOR4_FORWARD = 3
 BUTTON_MOTOR6_CLOSE = 0
 BUTTON_STEP_DEG = 5  # hat/button motors (3, 4) move this much per press
 DEADZONE = 0.05
+
+# What the stick does when you let go (the "Hold position" tick box in Joystick mode):
+#   ticked   - the stick sets how fast a joint moves; let go and she stays where she is,
+#              and the trigger clicks the claw shut / open.
+#   unticked - the stick sets where a joint is; let go and she goes back to rest one joint at
+#              a time, nearest the claw first, and the claw is closed while the trigger's held.
+# Either way a joint never jumps: it moves at these speeds at most.
+STICK_HOLD_DEFAULT = True
+HOLD_SPEED_DEG_S = 90      # full deflection, Hold position
+FOLLOW_SPEED_DEG_S = 240   # a joint following the stick, back-to-rest mode
+RETURN_SPEED_DEG_S = 60    # going back to rest after you let go
+RETURN_ORDER = (5, 2, 1)   # wrist roll, shoulder, base: nearest the claw first
 
 # Resend unchanged commands this often, so arm.ino knows the PC is still here
 # (it eases back to rest after 2 s of silence).
@@ -287,6 +303,101 @@ def joystick_commands(js, motors):
         motors[5]["channel"]: axis_to_angle(motor5_val, motors[5]["min"], motors[5]["max"], motors[5]["rest"]),
         motors[6]["channel"]: motor6_angle,
     }
+
+
+def toward(pos, target, max_step):
+    """pos moved toward target by at most max_step."""
+    return target if abs(target - pos) <= max_step else pos + max_step * (1 if target > pos else -1)
+
+
+class StickDriver:
+    """Joystick mode's stick motors (1, 2, 5) and claw (6), speed-limited so letting go never
+    snaps her anywhere (see STICK_HOLD_DEFAULT). update() returns {channel: angle} like
+    joystick_commands(), worked out from where the motors are now."""
+
+    def __init__(self, hold=STICK_HOLD_DEFAULT):
+        self.hold = hold
+        self.pos = {}           # motor -> angle as a float, so slow moves add up between frames
+        self.sent = {}          # motor -> the angle we last returned
+        self.active = {}        # motor -> its axis was pushed last frame
+        self.homing = []        # back-to-rest: motors you let go of, waiting their turn
+        self.claw_closed = False
+        self.prev_trigger = False
+        self.last = time.monotonic()
+
+    def set_hold(self, hold):
+        self.hold = hold
+        self.homing.clear()
+
+    def update(self, js, motors, angles):
+        now = time.monotonic()
+        dt = min(0.1, now - self.last)
+        self.last = now
+        axes = {1: AXIS_MOTOR1, 2: AXIS_MOTOR2, 5: roll_axis}
+        for n, a in axes.items():
+            m = motors[n]
+            v = js.get_axis(a) if a is not None and js.get_numaxes() > a else 0.0
+            if m["invert"]:
+                v = -v
+            if self.sent.get(n) != angles[n]:   # keys, the web page or a macro moved it: start from there
+                self.pos[n] = float(angles[n])
+                if n in self.homing:
+                    self.homing.remove(n)
+            pos = self.pos.setdefault(n, float(angles[n]))
+            active = abs(v) >= DEADZONE
+            if active:
+                if n in self.homing:
+                    self.homing.remove(n)
+                if self.hold:
+                    pos += v * HOLD_SPEED_DEG_S * dt
+                else:
+                    pos = toward(pos, axis_to_angle(v, m["min"], m["max"], m["rest"]), FOLLOW_SPEED_DEG_S * dt)
+            elif self.active.get(n) and not self.hold and n not in self.homing:
+                self.homing.append(n)            # just let go: it goes home when its turn comes
+            self.active[n] = active
+            self.pos[n] = max(m["min"], min(m["max"], pos))
+
+        # back to rest one joint at a time, nearest the claw first
+        for n in RETURN_ORDER:
+            if n in self.homing:
+                self.pos[n] = toward(self.pos[n], motors[n]["rest"], RETURN_SPEED_DEG_S * dt)
+                if self.pos[n] == motors[n]["rest"]:
+                    self.homing.remove(n)
+                break
+
+        trigger = bool(js.get_button(BUTTON_MOTOR6_CLOSE)) if js.get_numbuttons() > BUTTON_MOTOR6_CLOSE else False
+        if self.hold:
+            if trigger and not self.prev_trigger:
+                self.claw_closed = not self.claw_closed
+        else:
+            self.claw_closed = trigger
+        self.prev_trigger = trigger
+        closed = not self.claw_closed if motors[6]["invert"] else self.claw_closed
+
+        commands = {}
+        for n in axes:
+            self.sent[n] = int(round(self.pos[n]))
+            commands[motors[n]["channel"]] = self.sent[n]
+        commands[motors[6]["channel"]] = motors[6]["max"] if closed else motors[6]["min"]
+        return commands
+
+
+class TickBox:
+    def __init__(self, pos, label, checked=False):
+        self.box = pygame.Rect(pos[0], pos[1], 18, 18)
+        self.label = label
+        self.checked = checked
+
+    def hit(self, pos):
+        return self.box.inflate(220, 6).move(110, 0).collidepoint(pos)   # the box or its label
+
+    def draw(self, surface, font):
+        pygame.draw.rect(surface, BUTTON_COLOR, self.box, border_radius=3)
+        if self.checked:
+            pygame.draw.lines(surface, TEXT_COLOR, False,
+                              [(self.box.x + 4, self.box.y + 9), (self.box.x + 8, self.box.y + 13),
+                               (self.box.x + 14, self.box.y + 4)], 3)
+        surface.blit(font.render(self.label, True, TEXT_COLOR), (self.box.right + 8, self.box.y))
 
 
 def joystick_step(event):
@@ -996,6 +1107,7 @@ def main():
     parser.add_argument("--baud", type=int, default=115200, help="Serial baud rate (default 115200, must match .ino)")
     parser.add_argument("--rate", type=float, default=30, help="Update rate in Hz (default 30)")
     parser.add_argument("--mode", choices=["joystick", "slider", "ik", "fleet"], default=None, help="Initial mode (default: joystick if one is found, else sliders)")
+    parser.add_argument("--stick-rest", action="store_true", help="Start with 'Hold position' unticked: letting go of the stick sends her back to rest, one joint at a time")
     parser.add_argument("--list", action="store_true", help="List joystick devices and exit")
     parser.add_argument("--list-ports", action="store_true", help="List serial ports and exit")
     parser.add_argument("--fleet-port", type=int, default=DEFAULT_FLEET_PORT, help=f"Fleet mode HTTP port (default {DEFAULT_FLEET_PORT})")
@@ -1134,6 +1246,9 @@ def main():
     threading.Thread(target=check_mind, daemon=True).start()
     record_button = Button((30, TRANSPORT_BUTTON_Y, 160, 30), "Record")
     play_button = Button((200, TRANSPORT_BUTTON_Y, 160, 30), "Play")
+    stick = StickDriver(hold=not args.stick_rest)
+    hold_box = TickBox((20, MARGIN_TOP + 6 * 28 + 12), "Hold position (unticked: back to rest when you let go)",
+                       stick.hold)
     elbow_toggle = Button((30, MARGIN_TOP + 5 * ROW_HEIGHT, 150, 30), "Elbow: Up")
     claw_toggle = Button((200, MARGIN_TOP + 5 * ROW_HEIGHT, 150, 30), "Claw: Open")
 
@@ -1283,6 +1398,9 @@ def main():
                             play_start = time.time()
                             play_index = 0
                             play_prev_mode = mode
+                        elif mode == "joystick" and js is not None and hold_box.hit(pos):
+                            hold_box.checked = not hold_box.checked
+                            stick.set_hold(hold_box.checked)
                         elif mode == "ik" and elbow_toggle.hit(pos):
                             elbow_down = not elbow_down
                         elif mode == "ik" and claw_toggle.hit(pos):
@@ -1353,7 +1471,9 @@ def main():
 
                 local_commands = None  # channel -> angle from this mode's own input, if any
                 if mode == "joystick" and js is not None:
-                    local_commands = joystick_commands(js, motors)
+                    with fleet_lock:
+                        now_angles = dict(fleet_state["angles"])
+                    local_commands = stick.update(js, motors, now_angles)
                 elif mode == "slider":
                     local_commands = {s.channel: s.angle for s in slider_mode_sliders}
                 elif mode == "ik":
@@ -1454,6 +1574,8 @@ def main():
                         n = channel_to_motor.get(ch, "?")
                         screen.blit(font.render(f"Motor {n} (ch {ch}): {ang}", True, TEXT_COLOR), (20, y))
                         y += 28
+                if js is not None:
+                    hold_box.draw(screen, small_font)
             elif mode == "fleet":
                 if fleet_status["error"]:
                     screen.blit(small_font.render(fleet_status["error"], True, WARN_COLOR), (20, MARGIN_TOP - 20))

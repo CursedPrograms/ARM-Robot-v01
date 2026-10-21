@@ -65,6 +65,16 @@ constexpr int MARGIN_TOP = 250;
 constexpr int ROW_HEIGHT = 60;
 constexpr double DEADZONE = 0.05;
 constexpr int BUTTON_STEP_DEG = 5; // hat/button motors (3, 4) move this much per press
+// What the stick does when you let go: the "Hold position" tick box, as in controller.py.
+//   ticked   - the stick sets how fast a joint moves; let go and she stays where she is,
+//              and the trigger clicks the claw shut / open.
+//   unticked - the stick sets where a joint is; let go and she goes back to rest one joint at
+//              a time, nearest the claw first, and the claw is closed while the trigger's held.
+// Either way a joint never jumps: it moves at these speeds at most.
+constexpr double HOLD_SPEED_DEG_S = 90;     // full deflection, Hold position
+constexpr double FOLLOW_SPEED_DEG_S = 240;  // a joint following the stick, back-to-rest mode
+constexpr double RETURN_SPEED_DEG_S = 60;   // going back to rest after you let go
+constexpr int RETURN_ORDER[] = {5, 2, 1};   // wrist roll, shoulder, base: nearest the claw first
 // Resend unchanged commands this often, so arm.ino knows the PC is still here
 // (it eases back to rest after 2 s of silence).
 constexpr double KEEPALIVE_SECS = 0.5;
@@ -98,6 +108,7 @@ enum ControlId {
     ID_MACRO_LIST,
     ID_ELBOW_TOGGLE,
     ID_CLAW_TOGGLE,
+    ID_HOLD_BOX,
     ID_TIMER = 1,
 };
 
@@ -114,6 +125,7 @@ struct Args {
     bool listPorts = false;
     bool serve = false;
     bool noServe = false;   // default is to serve + join RIFT, like every other robot
+    bool stickRest = false; // --stick-rest: start with Hold position unticked
     std::string connect; // --connect URL: client mode, no serial port
 };
 
@@ -122,6 +134,85 @@ struct SliderRow {
     HWND label = nullptr;
     HWND track = nullptr;
     HWND value = nullptr;
+};
+
+double toward(double pos, double target, double maxStep) {
+    if (std::fabs(target - pos) <= maxStep) return target;
+    return pos + (target > pos ? maxStep : -maxStep);
+}
+
+int axisToAngle(double value, int lo, int hi, int rest, double deadzone = DEADZONE);
+
+// Joystick mode's stick motors (1, 2, 5) and claw (6), speed-limited so letting go never
+// snaps her anywhere (mirrors controller.py's StickDriver). update() returns {channel: angle},
+// worked out from where the motors are now (motor-keyed `angles`).
+struct StickDriver {
+    bool hold = true;
+    std::map<int, double> pos;     // motor -> angle as a double, so slow moves add up between frames
+    std::map<int, int> sent;       // motor -> the angle we last returned
+    std::map<int, bool> active;    // motor -> its axis was pushed last frame
+    std::vector<int> homing;       // back-to-rest: motors you let go of, waiting their turn
+    bool clawClosed = false;
+    bool prevTrigger = false;
+    Clock::time_point last = Clock::now();
+
+    void setHold(bool h) { hold = h; homing.clear(); }
+    void unhome(int n) { homing.erase(std::remove(homing.begin(), homing.end(), n), homing.end()); }
+    bool isHoming(int n) const { return std::find(homing.begin(), homing.end(), n) != homing.end(); }
+
+    std::map<int, int> update(const JoystickState& js, const MotorMap& motors, const std::map<int, int>& angles) {
+        auto now = Clock::now();
+        double dt = std::min(0.1, std::chrono::duration<double>(now - last).count());
+        last = now;
+        const std::pair<int, int> axes[] = {{1, 0}, {2, 1}, {5, 2}};   // motor, axis
+        for (auto [n, a] : axes) {
+            const auto& m = motors.at(n);
+            double v = js.numAxes > a ? js.axis[a] : 0.0;
+            if (m.invert) v = -v;
+            int angleNow = angles.at(n);
+            auto s = sent.find(n);
+            if (s == sent.end() || s->second != angleNow) {   // keys, the web page or a macro moved it
+                pos[n] = angleNow;
+                unhome(n);
+            }
+            double p = pos.count(n) ? pos[n] : angleNow;
+            bool on = std::fabs(v) >= DEADZONE;
+            if (on) {
+                unhome(n);
+                if (hold) p += v * HOLD_SPEED_DEG_S * dt;
+                else p = toward(p, axisToAngle(v, m.min, m.max, m.rest), FOLLOW_SPEED_DEG_S * dt);
+            } else if (active[n] && !hold && !isHoming(n)) {
+                homing.push_back(n);   // just let go: it goes home when its turn comes
+            }
+            active[n] = on;
+            pos[n] = std::clamp(p, static_cast<double>(m.min), static_cast<double>(m.max));
+        }
+
+        // back to rest one joint at a time, nearest the claw first
+        for (int n : RETURN_ORDER) {
+            if (!isHoming(n)) continue;
+            pos[n] = toward(pos[n], motors.at(n).rest, RETURN_SPEED_DEG_S * dt);
+            if (pos[n] == motors.at(n).rest) unhome(n);
+            break;
+        }
+
+        bool trigger = js.numButtons > 0 && (js.buttons & 1);
+        if (hold) {
+            if (trigger && !prevTrigger) clawClosed = !clawClosed;
+        } else {
+            clawClosed = trigger;
+        }
+        prevTrigger = trigger;
+        bool closed = motors.at(6).invert ? !clawClosed : clawClosed;
+
+        std::map<int, int> cmd;
+        for (auto [n, a] : axes) {
+            sent[n] = static_cast<int>(std::lround(pos[n]));
+            cmd[motors.at(n).channel] = sent[n];
+        }
+        cmd[motors.at(6).channel] = closed ? motors.at(6).max : motors.at(6).min;
+        return cmd;
+    }
 };
 
 struct App {
@@ -157,6 +248,8 @@ struct App {
     HWND btnElbow = nullptr;
     HWND btnClaw = nullptr;
     HWND motorLines[6] = {};
+    HWND chkHold = nullptr;       // Joystick mode's "Hold position" tick box
+    StickDriver stick;
 
     std::vector<SliderRow> sliderRows;   // one per motor, Slider mode
     std::map<std::string, SliderRow> ikRows; // "x","y","z","pitch","roll"
@@ -229,34 +322,10 @@ std::string getLocalLanIp() {
 }
 
 // A centred (released) stick maps to rest; full deflection to lo/hi.
-int axisToAngle(double value, int lo, int hi, int rest, double deadzone = DEADZONE) {
+int axisToAngle(double value, int lo, int hi, int rest, double deadzone) {
     if (std::fabs(value) < deadzone) return rest;
     double angle = rest + value * (value > 0 ? hi - rest : rest - lo);
     return static_cast<int>(std::lround(angle));
-}
-
-// Mirrors controller.py's joystick_commands(): returns {channel: angle} for
-// the stick motors (1, 2, 5) and the claw (6). The hat/button motors (3, 4)
-// step per press instead, see joystickSteps().
-std::map<int, int> joystickCommands(const JoystickState& js, const MotorMap& motors) {
-    double m1 = js.numAxes > 0 ? js.axis[0] : 0.0;
-    double m2 = js.numAxes > 1 ? js.axis[1] : 0.0;
-    double m5 = js.numAxes > 2 ? js.axis[2] : 0.0;
-
-    bool closeBtn = js.numButtons > 0 && (js.buttons & 1);
-
-    auto inv = [&](int n, double v) { return motors.at(n).invert ? -v : v; };
-    m1 = inv(1, m1);
-    m2 = inv(2, m2);
-    m5 = inv(5, m5);
-    if (motors.at(6).invert) closeBtn = !closeBtn;
-
-    std::map<int, int> cmd;
-    cmd[motors.at(1).channel] = axisToAngle(m1, motors.at(1).min, motors.at(1).max, motors.at(1).rest);
-    cmd[motors.at(2).channel] = axisToAngle(m2, motors.at(2).min, motors.at(2).max, motors.at(2).rest);
-    cmd[motors.at(5).channel] = axisToAngle(m5, motors.at(5).min, motors.at(5).max, motors.at(5).rest);
-    cmd[motors.at(6).channel] = closeBtn ? motors.at(6).max : motors.at(6).min;
-    return cmd;
 }
 
 // Mirrors controller.py's joystick_step(): the (motor, direction) pairs for
@@ -348,6 +417,7 @@ void applyModeVisibility(App& app) {
 
     bool showMotorLines = (app.mode == Mode::Joystick || app.mode == Mode::Fleet);
     showWindowGroup(app.motorLines, 6, showMotorLines);
+    ShowWindow(app.chkHold, app.mode == Mode::Joystick ? SW_SHOW : SW_HIDE);
 
     for (int i = 0; i < 4; i++) EnableWindow(app.btnMode[i], TRUE);
     if (!app.joystickAvailable) EnableWindow(app.btnMode[0], FALSE);
@@ -574,7 +644,12 @@ void tick(App& app) {
     if (app.mode == Mode::Joystick && app.joystickAvailable) {
         JoystickState state;
         if (app.joystick.poll(state)) {
-            local = toMotorKeyed(app, joystickCommands(state, app.motors));
+            std::map<int, int> angles;
+            {
+                std::lock_guard<std::mutex> lock(app.fleetState.mutex);
+                angles = app.fleetState.angles;
+            }
+            local = toMotorKeyed(app, app.stick.update(state, app.motors, angles));
             if (app.adopted) {
                 for (auto [n, dir] : joystickSteps(state, app.prevHatY, app.prevButtons)) stepMotor(app, n, dir, BUTTON_STEP_DEG);
             }
@@ -703,6 +778,9 @@ void onCommand(App& app, WPARAM wParam) {
         case ID_ELBOW_TOGGLE:
             app.elbowDown = !app.elbowDown;
             SetWindowTextA(app.btnElbow, app.elbowDown ? "Elbow: Down" : "Elbow: Up");
+            break;
+        case ID_HOLD_BOX:
+            app.stick.setHold(SendMessage(app.chkHold, BM_GETCHECK, 0, 0) == BST_CHECKED);
             break;
         case ID_CLAW_TOGGLE:
             app.clawClosed = !app.clawClosed;
@@ -905,6 +983,11 @@ void createControls(App& app) {
     for (int i = 0; i < 6; i++) {
         app.motorLines[i] = makeStatic(hwnd, 20, MARGIN_TOP + i * 28, 500, 22, "");
     }
+    app.chkHold = CreateWindowExA(0, "BUTTON", "Hold position (unticked: back to rest when you let go)",
+                                  WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 20, MARGIN_TOP + 6 * 28 + 12, 520, 22,
+                                  hwnd, reinterpret_cast<HMENU>(ID_HOLD_BOX), GetModuleHandle(nullptr), nullptr);
+    app.stick.setHold(!app.args.stickRest);
+    SendMessage(app.chkHold, BM_SETCHECK, app.stick.hold ? BST_CHECKED : BST_UNCHECKED, 0);
 
     refreshMacroList(app);
     applyModeVisibility(app);
@@ -928,6 +1011,7 @@ bool parseArgs(int argc, char** argv, Args& out) {
         else if (a == "--list-ports") out.listPorts = true;
         else if (a == "--serve") out.serve = true;
         else if (a == "--no-serve") out.noServe = true;
+        else if (a == "--stick-rest") out.stickRest = true;
         else if (a == "--connect") out.connect = next("--connect");
         else if (a == "--mode") {
             std::string m = next("--mode");

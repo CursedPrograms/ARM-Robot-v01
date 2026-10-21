@@ -103,7 +103,7 @@ The arm goes to this pose:
 
 - **When the Arduino starts up**
 - **When no PC is controlling it.** Every controller resends its angles at least every 0.5 s. If `arm.ino` hears nothing for 2 s (controller closed or crashed, cable pulled), the arm eases back to rest.
-- **When you let go of the stick.** The stick motors spring back to rest, and the claw opens.
+- **When you let go of the stick, if Hold position is unticked.** The stick motors ease back to rest one at a time, wrist roll first, then the shoulder, then the base. Ticked (the default), letting go leaves her where she is.
 - **When you press Home**, or Reset on the web page
 
 The values live in two places, so change both: `rest` in `config.json` (the controllers) and `REST_ANGLE` in `scripts/arm/arm.ino` (the Arduino, reflash after changing).
@@ -119,12 +119,13 @@ The same list opens in its own window: **F1** in any of the controllers (Python,
 
 | Key | Does |
 |---|---|
-| Stick left / right (axis 0) | motor 1, base: follows the stick, centred = rest |
-| Stick forward / back (axis 1) | motor 2, shoulder: follows the stick, centred = rest |
-| Twist (axis 2) | motor 5, wrist roll: follows the stick, centred = rest |
+| Stick left / right (axis 0) | motor 1, base |
+| Stick forward / back (axis 1) | motor 2, shoulder |
+| Twist (axis 2) | motor 5, wrist roll |
 | Hat up / down | motor 3, elbow: 5 degrees a press |
 | Button 3 / button 2 | motor 4, wrist pitch: 5 degrees a press |
-| Trigger (button 0) | motor 6, claw: held = closed, released = open |
+| Trigger (button 0) | motor 6, claw: a click closes / opens it (Hold position), or held = closed |
+| Hold position (tick box) | ticked: the stick sets speed and letting go holds her where she is; unticked: the stick sets position and letting go sends her back to rest one joint at a time, wrist roll first (Python and C++ controllers; the others: centred = rest) |
 | | *a held hat direction or button is one press; motors 3 and 4 stay where you stepped them* |
 | | *every motor stays inside its min / max from config.json; invert flips its direction* |
 
@@ -136,7 +137,7 @@ The same list opens in its own window: **F1** in any of the controllers (Python,
 | Right stick across | motor 5, wrist roll |
 | D-pad up / down | motor 3, elbow: 5 degrees a press |
 | Y (3) / X (2) | motor 4, wrist pitch: 5 degrees a press |
-| A (0) | motor 6, claw: held = closed, released = open |
+| A (0) | motor 6, claw: like the trigger |
 | | *a joystick always wins over a gamepad; plug either in any time* |
 
 **Keyboard (every mode except IK; click the window first)**
