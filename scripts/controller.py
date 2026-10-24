@@ -57,6 +57,7 @@ Usage:
 import os
 import argparse
 import json
+import math
 import re
 import socket
 import sys
@@ -79,6 +80,7 @@ except ImportError:
 
 from motor_config import load_motor_config, load_geometry
 from colour_scheme import rgb
+import controller_kit as kit   # themes, Voice (the same file in every robot's controller)
 from board_id import identify_ports
 from IK_controller import inverse_kinematics
 import mind   # scripts/mind.py: her LLM mind (Mind mode), the same file in every controller
@@ -141,7 +143,8 @@ DEFAULT_FLEET_PORT = 5011
 FLEET_HEARTBEAT_SECS = 10
 
 # ---- Window layout ----
-WINDOW_WIDTH, WINDOW_HEIGHT = 560, 680
+WINDOW_WIDTH, WINDOW_HEIGHT = 560, 680   # her controls; the arm panel is beside them
+PANEL_W = 340                            # the arm drawn from her own geometry, THEME, VOICE
 MODE_BUTTON_Y = 56
 TRANSPORT_BUTTON_Y = 100
 MACRO_LIST_Y = 138
@@ -166,6 +169,84 @@ BUTTON_RECORD_COLOR = rgb("danger")
 MACRO_SELECTED_COLOR = rgb("selected")
 TRACK_COLOR = rgb("track")
 KNOB_COLOR = rgb("accent")
+SETTINGS = kit.Settings()
+
+
+def apply_theme(name, custom=None):
+    """DEFAULT (colour_scheme.xml as it is), LIGHT (light surfaces from its own colours) or CUSTOM
+    (controller_settings.json's "custom", her colour_scheme.xml's names)."""
+    import colour_scheme
+    c = dict(colour_scheme._scheme)
+    if name == "LIGHT":
+        white, black = (255, 255, 255), (0, 0, 0)
+        m = kit.mix
+        c.update(background=m(c["accent_hover"], white, 0.55), panel=white, border=m(c["border"], white, 0.55),
+                 text=c["background"], text_dim=m(c["text_dim"], c["background"], 0.55),
+                 button=m(c["button"], white, 0.72), button_hover=m(c["button_hover"], white, 0.5),
+                 button_active=m(c["button_active"], black, 0.25), button_disabled=m(c["button_disabled"], white, 0.85),
+                 selected=m(c["selected"], white, 0.6), track=m(c["track"], white, 0.6), accent=m(c["accent"], black, 0.45))
+    elif name == "CUSTOM":
+        c.update({k: kit.rgb(v) for k, v in (custom or {}).items() if isinstance(v, str) and len(v) == 7})
+    globals().update(BG_COLOR=c["background"], TEXT_COLOR=c["text"], STATUS_COLOR=c["text_dim"], WARN_COLOR=c["warn"],
+                     BUTTON_COLOR=c["button"], BUTTON_HOVER_COLOR=c["button_hover"],
+                     BUTTON_ACTIVE_COLOR=c["button_active"], BUTTON_DISABLED_COLOR=c["button_disabled"],
+                     BUTTON_RECORD_COLOR=c["danger"], MACRO_SELECTED_COLOR=c["selected"], TRACK_COLOR=c["track"],
+                     KNOB_COLOR=c["accent"], PANEL_COLOR=c["panel"], ACCENT_COLOR=c["accent_hover"])
+
+
+apply_theme(SETTINGS.theme, SETTINGS.get("custom"))
+
+
+def draw_arm(screen, font, small_font, motors, geometry, angles, x0):
+    """Her arm, drawn from her own geometry (config.json) and joint maths (IK_controller.raw_to_deg):
+    from the side (base, shoulder, elbow, wrist, claw; her reach as a circle) and from above (the base
+    turning). It follows every command, so with no Arduino plugged in it's her emulator."""
+    from IK_controller import raw_to_deg
+    panel = pygame.Rect(x0 + 10, 56, PANEL_W - 20, WINDOW_HEIGHT - 66)
+    pygame.draw.rect(screen, PANEL_COLOR, panel, border_radius=10)
+    screen.blit(small_font.render("from the side", True, STATUS_COLOR), (panel.x + 10, panel.y + 8))
+    try:
+        sh, el, wr = (math.radians(raw_to_deg(motors, n, angles.get(n, motors[n]["rest"]))) for n in (2, 3, 4))
+        base = math.radians(raw_to_deg(motors, 1, angles.get(1, motors[1]["rest"])))
+    except (KeyError, TypeError, ValueError):
+        return
+    g = geometry
+    l1, l2, l3, h0 = g["upperArmLength"], g["forearmLength"], g["wristLength"], g["baseHeight"]
+    reach = (l1 + l2 + l3) or 300
+    s = min((panel.w - 60) / reach, 250 / (reach + h0))   # the whole reach fits beside and above the base
+    ox, oy = panel.x + 30, panel.y + 300
+    pt = lambda r, z: (int(ox + r * s), int(oy - z * s))
+    screen.set_clip(pygame.Rect(panel.x, panel.y + 24, panel.w, 300))
+    pygame.draw.line(screen, TRACK_COLOR, (panel.x + 10, oy), (panel.right - 10, oy), 1)   # the desk
+    pygame.draw.circle(screen, TRACK_COLOR, pt(0, h0), int(reach * s), 1)                    # her reach
+    a1, a2, a3 = sh, sh + el, sh + el + wr
+    j = [(0, 0), (0, h0)]
+    j.append((j[-1][0] + l1 * math.cos(a1), j[-1][1] + l1 * math.sin(a1)))
+    j.append((j[-1][0] + l2 * math.cos(a2), j[-1][1] + l2 * math.sin(a2)))
+    j.append((j[-1][0] + l3 * math.cos(a3), j[-1][1] + l3 * math.sin(a3)))
+    pygame.draw.lines(screen, KNOB_COLOR, False, [pt(*q) for q in j], 6)
+    for q in j[1:4]:
+        pygame.draw.circle(screen, ACCENT_COLOR, pt(*q), 7)
+        pygame.draw.circle(screen, BG_COLOR, pt(*q), 3)
+    claw = angles.get(6)
+    tip = pt(*j[-1])
+    spread = 7 if claw is not None and claw < motors.get(6, {}).get("rest", 90) else 13
+    for sgn in (-1, 1):   # the claw's two fingers
+        pygame.draw.line(screen, ACCENT_COLOR, tip, (tip[0] + int(14 * math.cos(a3 + sgn * 0.5)),
+                                                     tip[1] - int(14 * math.sin(a3 + sgn * 0.5)) + sgn * spread // 3), 3)
+    screen.set_clip(None)
+    screen.blit(small_font.render(f"tip  r {j[-1][0]:.0f}  z {j[-1][1]:.0f} mm", True, TEXT_COLOR), (panel.x + 10, oy + 10))
+    # from above: the base's turn and how far out the tip is
+    cy, cx = panel.y + 470, panel.x + panel.w // 2
+    screen.blit(small_font.render("from above", True, STATUS_COLOR), (panel.x + 10, cy - 120))
+    ts = 110 / reach   # from above: her whole reach in a 110 px circle
+    pygame.draw.circle(screen, TRACK_COLOR, (cx, cy), 110, 1)
+    rr = j[-1][0] * ts
+    tipxy = (int(cx + rr * math.sin(base)), int(cy - rr * math.cos(base)))
+    pygame.draw.line(screen, KNOB_COLOR, (cx, cy), tipxy, 6)
+    pygame.draw.circle(screen, ACCENT_COLOR, (cx, cy), 9)
+    pygame.draw.circle(screen, ACCENT_COLOR, tipxy, 5)
+    screen.blit(small_font.render(f"base {math.degrees(base):+.0f} deg", True, TEXT_COLOR), (panel.x + 10, cy + 70))
 
 
 def axis_to_angle(value, lo, hi, rest, deadzone=DEADZONE):
@@ -770,6 +851,22 @@ ARM_MOVE_JOINTS = {"base_left": (1, -1), "base_right": (1, 1), "shoulder_up": (2
                    "elbow_up": (3, 1), "elbow_down": (3, -1), "wrist_up": (4, 1), "wrist_down": (4, -1),
                    "roll_left": (5, -1), "roll_right": (5, 1)}
 ARM_VOICE = ("Microsoft Zira Desktop", -2, "low")   # she: slow and low (robot-voices-genders)
+# Her voice through this PC outside MIND too (VOICE): patient, precise, a little philosophical, dry
+ARM_LINES = {
+    "connect": ["Arm online. Precisely where I left myself.", "Hello. I can't walk, but I can reach."],
+    "display": ["No serial port. I'll just imagine moving.", "Display only. Pretend I'm moving gracefully."],
+    "remote": ["Mirroring another arm. Two of us now."],
+    "mode_slider": ["Sliders. One joint at a time, as it should be."],
+    "mode_joystick": ["A joystick. Gentle, please.", "Stick control. I trust you. Mostly."],
+    "mode_ik": ["Inverse kinematics. Tell me where, I'll work out how.", "Give me a point. I'll find the angles."],
+    "mode_fleet": ["The fleet can see me now. Hello, RIFT."],
+    "record_on": ["Recording. Every move is history now.", "I'm taking notes."],
+    "record_off": ["Saved. I'll remember that.", "Recorded. A small masterpiece."],
+    "play": ["Playing it back. Deja vu.", "From memory, then."],
+    "stop": ["Stopping. Holding still."],
+    "claw_close": ["Got it.", "Gripping."],
+    "claw_open": ["Letting go.", "Released."],
+}
 ARM_SAFETY = "every joint stops at its limits (config.json), and the claw only opens or closes"
 MIND_STEP_DEG = 10        # one step of a move she can see
 MIND_BLIND_STEP_DEG = 3   # ...and when she can't see herself: one tiny nudge
@@ -1162,7 +1259,7 @@ def main():
         status = "No Arduino-like serial port found - display-only mode."
     print(status)
 
-    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    screen = pygame.display.set_mode((WINDOW_WIDTH + PANEL_W, WINDOW_HEIGHT))
     pygame.display.set_caption("Arm Controller")
     try:  # window icon: the robot's avatar
         pygame.display.set_icon(pygame.image.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "images", "arm-icon.png")))
@@ -1245,6 +1342,11 @@ def main():
         mind_state["capable"], mind_state["why"] = mind.can_think()
     threading.Thread(target=check_mind, daemon=True).start()
     record_button = Button((30, TRANSPORT_BUTTON_Y, 160, 30), "Record")
+    theme_button = Button((WINDOW_WIDTH + 10, 12, 150, 30), f"THEME: {SETTINGS.theme}")
+    voice = kit.Voice(ARM_VOICE[0], ARM_LINES, ARM_VOICE[1], ARM_VOICE[2])
+    voice.on = SETTINGS.get("voice", True)
+    voice_button = Button((WINDOW_WIDTH + 170, 12, 150, 30), "VOICE ON" if voice.on else "VOICE OFF")
+    heard = {"mode": None, "recording": False, "playing": False, "claw": None, "started": False}
     play_button = Button((200, TRANSPORT_BUTTON_Y, 160, 30), "Play")
     stick = StickDriver(hold=not args.stick_rest)
     hold_box = TickBox((20, MARGIN_TOP + 6 * 28 + 12), "Hold position (unticked: back to rest when you let go)",
@@ -1380,6 +1482,15 @@ def main():
                             ensure_fleet_started()
                         elif mode_buttons["mind"].hit(pos) and mind_state["capable"]:
                             mode = "mind"
+                        elif theme_button.hit(pos):
+                            apply_theme_colours = SETTINGS.next_theme()
+                            apply_theme(SETTINGS.theme, SETTINGS.get("custom"))
+                            theme_button.label = f"THEME: {SETTINGS.theme}"
+                        elif voice_button.hit(pos):
+                            voice.on = not voice.on
+                            SETTINGS["voice"] = voice.on
+                            SETTINGS.save()
+                            voice_button.label = "VOICE ON" if voice.on else "VOICE OFF"
                         elif record_button.hit(pos):
                             if not recording:
                                 recording = True
@@ -1597,6 +1708,31 @@ def main():
             if playing:
                 screen.blit(small_font.render(f"Playing... step {play_index}/{len(play_steps)}", True, STATUS_COLOR),
                             (370, TRANSPORT_BUTTON_Y + 8))
+
+            # the arm panel: her arm from her geometry (her emulator when no Arduino's plugged in)
+            with fleet_lock:
+                now_angles = {int(k): v for k, v in fleet_state["angles"].items()}
+            draw_arm(screen, font, small_font, motors, geometry, now_angles, WINDOW_WIDTH)
+            theme_button.draw(screen, small_font)
+            voice_button.draw(screen, small_font, active=voice.on)
+            if voice.on and voice.said:
+                screen.blit(small_font.render(kit.fit(f'ARM: "{voice.said}"', small_font, PANEL_W - 30), True, TEXT_COLOR),
+                            (WINDOW_WIDTH + 20, WINDOW_HEIGHT - 30))
+
+            # her voice, from what changed (her MIND talks for itself)
+            if not arm_mind.on:
+                if not heard["started"]:
+                    heard["started"] = True
+                    voice.say("remote" if args.connect else "connect" if ser is not None else "display")
+                if heard["mode"] is not None and mode != heard["mode"] and mode != "mind":
+                    voice.say("mode_" + mode)
+                if recording != heard["recording"]:
+                    voice.say("record_on" if recording else "record_off")
+                if playing != heard["playing"]:
+                    voice.say("play" if playing else "stop")
+                if heard["claw"] is not None and claw_closed != heard["claw"]:
+                    voice.say("claw_close" if claw_closed else "claw_open")
+            heard.update(mode=mode, recording=recording, playing=playing, claw=claw_closed)
 
             pygame.display.flip()
             clock.tick(args.rate if args.rate > 0 else 30)

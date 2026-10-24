@@ -171,6 +171,19 @@ The same list opens in its own window: **F1** in any of the controllers (Python,
 
 ---
 
+## The Python controller's arm panel, THEME and VOICE
+
+- **Her arm, drawn**: a panel beside the controls draws her from her own geometry (`config.json`) and joint
+  maths (`IK_controller.py`): from the side (base, shoulder, elbow, wrist, claw, her reach as a circle) and
+  from above (the base turning), following every command. With no Arduino plugged in it's her emulator:
+  everything still works, and you see what she would do. Until `kinematicZero` is calibrated she draws her
+  rest pose as level.
+- **THEME**: DEFAULT, LIGHT or CUSTOM, all from `colour_scheme.xml`; CUSTOM puts its colours in
+  `scripts/controller_settings.json` for you to change.
+- **VOICE**: she talks through this PC outside MIND too (Zira, slow and low, dry): modes, recording, playback,
+  the claw. Her MIND log: `~/.robot_minds/logs/ARM-<date>.log`.
+- Every launcher comes in `.bat`, `.ps1` and `.sh` (the C++ controller is a Windows program: its `.sh` says so).
+
 ## Finding the arm's port
 
 Nothing here needs a hard-coded COM port. `scripts/arm/arm.ino` answers a one-word question, so a controller can find the arm by asking:

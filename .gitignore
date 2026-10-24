@@ -57,3 +57,6 @@ scripts/rust_controller/target/
 
 TODO.txt
 venv/
+
+# controller theme / voice / custom colours (per PC)
+scripts/controller_settings.json
