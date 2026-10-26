@@ -3,3 +3,4 @@ pyserial
 flask
 requests
 opencv-python   # Mind mode: the camera that watches the arm
+numpy           # Mind mode: the colour blob in her camera frame (opencv uses it too)
