@@ -148,3 +148,9 @@ footer {
 /* ARM's avatar beside the title */
 header h1 { display: flex; align-items: center; gap: 12px; }
 .avatar { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 2px solid var(--accent, #c0c4c7); }
+
+.keys {
+  margin: 0 0 8px;
+  font-size: 13px;
+  opacity: .75;
+}
