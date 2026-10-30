@@ -1,23 +1,29 @@
 <p align="center"><img src="images/avatar_round.png" width="160" alt="ARM"></p>
 
-[![Twitter: @NorowaretaGemu](https://img.shields.io/badge/X-@NorowaretaGemu-blue.svg?style=flat)](https://x.com/NorowaretaGemu)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+<h1 align="center">ARM</h1>
+<h3 align="center">Articulated Robotic Manipulator</h3>
+<p align="center"><i>A DREAM Robotics Agent</i></p>
+
+<div align="center">
+
+[![Twitter: @NorowaretaGemu](https://img.shields.io/badge/X-@NorowaretaGemu-blue.svg?style=flat)](https://x.com/NorowaretaGemu) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+</div>
 
 <div align="center">
   <a href="https://ko-fi.com/cursedentertainment">
-    <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="ko-fi" style="width: 20%;"/>
+    <img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="ko-fi" width="180"/>
   </a>
 </div>
+
 <div align="center">
   <img alt="Python" src="https://img.shields.io/badge/python%20-%23323330.svg?&style=for-the-badge&logo=python&logoColor=white"/>
-    <img alt="C++" src="https://img.shields.io/badge/c++%20-%23323330.svg?&style=for-the-badge&logo=c%2B%2B&logoColor=white"/>
-    <img alt="Julia" src="https://img.shields.io/badge/julia%20-%23323330.svg?&style=for-the-badge&logo=julia&logoColor=white"/>
-    <img alt="C#" src="https://img.shields.io/badge/c%23%20-%23323330.svg?&style=for-the-badge&logo=csharp&logoColor=white"/>
+  <img alt="C++" src="https://img.shields.io/badge/c++%20-%23323330.svg?&style=for-the-badge&logo=c%2B%2B&logoColor=white"/>
+  <img alt="Julia" src="https://img.shields.io/badge/julia%20-%23323330.svg?&style=for-the-badge&logo=julia&logoColor=white"/>
+  <img alt="C#" src="https://img.shields.io/badge/c%23%20-%23323330.svg?&style=for-the-badge&logo=csharp&logoColor=white"/>
 </div>
 
 ---
-
-# ARM-Robot-v01
 
 - Robot Type: 6 DOF Arm
 
@@ -39,7 +45,10 @@
 
 **Windows controller:** [`builds/ARM-Controller.exe`](builds/ARM-Controller.exe) shows ARM's own web page in a window, so it always matches the page. Source: `scripts/web_controller`.
 
+---
+
 ## Related Projects
+
 
 <table>
   <tr>
@@ -93,19 +102,6 @@ Channels, limits, rest angles and directions live in `config.json`.
 
 > [!NOTE]
 > The arm's link lengths in `config.json` (`geometry`) are still unmeasured placeholders, so IK mode can't be accurate yet. Measure them in millimetres and fill them in.
-
----
-
-## Mind mode: she watches herself, and picks things up
-
-The **Mind** button (Python controller) hands the arm to her LLM mind: she looks, thinks out loud on screen, says what she's doing in her own voice (patient, dry, Zira slow and low), moves a joint, and remembers. Only on an x86 PC with 8 GB+ RAM and a GTX 1050 or better (`mind.py` checks), with Ollama's qwen3 (sized to the GPU) and a vision model (gemma3).
-
-- **She watches herself through a webcam** pointed at the arm (`--camera N`, default 0). The vision model lists what's in the picture and she decides from that list whether her arm is there. (Asked "is there a robot arm?", a small vision model says yes to a dark frame or an empty desk, so it's never asked that.)
-- **When she can't see herself she's very hesitant:** a dark, covered or blank picture, no camera, or no arm in what the model sees, and every move becomes one 3° nudge, whatever she planned, and she says why. Seeing herself, she moves in 10° steps.
-- **Pick something up:** choose what in the Mind panel: a **colour button** (red, orange, yellow, green, blue, purple), **click anything in the live camera preview** to take its colour, or **type what it is** in the text box (Enter). A colour is found with OpenCV in every frame and outlined in the preview; a typed thing is found in the vision model's list. Her mind gets where it is in the picture and how big, and a how-to (centre it with the base, open the claw, reach until it's big and low, close, lift), and works it out one move at a time.
-- Picking is new and needs tuning on the real arm: seeing the colour is reliable; getting the claw around it is the 4B model's job, and it's slow and clumsy at it.
-
-Requires `opencv-python` (in `requirements.txt`) and a USB webcam.
 
 ---
 
@@ -206,58 +202,6 @@ The same list opens in its own window: **F1** in any of the controllers (Python,
   Python controller: `mind.py` is the fleet's one shared file. VOICE's on / off isn't saved on these five.
 - Every launcher comes in `.bat`, `.ps1` and `.sh` (the C++ controller is a Windows program: its `.sh` says so).
 
-## Finding the arm's port
-
-Nothing here needs a hard-coded COM port. `scripts/arm/arm.ino` answers a one-word question, so a controller can find the arm by asking:
-
-```
-PC:   WHO
-COM6: I am Arm
-```
-
-Every controller does this when you leave out `--port`: it opens each port (the compiled controllers only try ports that look like Arduino adapters) at 115200 baud, waits about 2 seconds for the board to reset, sends `WHO`, and uses the port that answers `I am Arm`. If none answers it falls back to the old guess (the first port whose description looks like an Arduino, CH340, CP210x or FTDI adapter). `--port COM6` still overrides all of it, and `--list-ports` lists what's there.
-
-- **You must reflash** the board with the current `arm.ino` before it can answer.
-- **Sharing one PC with [DREAM](https://github.com/CursedPrograms/DREAM).** Her sensor board (`dream_sensors.ino`, 9600 baud) answers `WHO` with `I am Dream` the same way, so both projects can run from one computer and each finds its own board, whatever COM numbers Windows hands out. Only one program can hold a serial port, so run one controller per arm.
-- **Python:** `scripts/board_id.py` does the asking (`python scripts/board_id.py` lists every port and who answered). **C++, Go, Rust and Julia** ask only the ports that look like Arduino adapters, so they skip Bluetooth ports that can take a long time to open. **C#** can't read USB descriptions, so it asks every port at once.
-- Asking a port takes about 3 seconds, so `--port` is faster when you know it.
-
----
-
-## Colour scheme
-
-Every UI takes its colours from one file, `colour_scheme.xml` in the repo root. Edit a value and restart the controller. The compiled controllers read it at start-up too, so colour changes need no rebuild (build once first to get the code that reads it).
-
-```xml
-<colour name="background" value="#33292F"/>
-<colour name="button_active" value="#9C0060"/>
-```
-
-Write each colour on its own line as `name="..." value="#RRGGBB"` (name first; the C++, Rust and Julia loaders read it line by line). A missing file, or a missing or malformed colour, falls back to the built-in default for that one colour.
-
-| Role | Default | Used for |
-|---|---|---|
-| `background` | `#33292F` | Window and page background |
-| `panel`, `border` | `#331F2B`, `#361529` | Rows, list boxes, outlines |
-| `text`, `text_dim` | `#FFFFFF`, `#C9B6C1` | Main text, status lines |
-| `button`, `button_hover`, `button_active`, `button_disabled` | `#361529`, `#691548`, `#9C0060`, `#331F2B` | Buttons (active = the selected mode) |
-| `accent`, `accent_hover` | `#9C0060`, `#C21F82` | Slider knobs, highlights, values |
-| `track`, `selected` | `#691548`, `#691548` | Slider track, the chosen macro |
-| `danger`, `danger_hover`, `warn` | `#963232`, `#AD3A3A`, `#F08C3C` | Record and reset, warnings |
-
-How each front end applies it:
-
-| UI | How |
-|---|---|
-| Python window (`controller.py`) | `scripts/colour_scheme.py` supplies the colours |
-| Web page | The controller serves `/colour_scheme.xml`; `app.js` applies it over `style.css`'s defaults |
-| Julia | Read into the drawing constants at start-up |
-| Rust (egui), Go (Fyne) | Applied as the toolkit's theme |
-| C# (Avalonia) | Overrides the Fluent theme's button, slider and list colours |
-| C++ (Win32) | Window, labels and list box, with owner-drawn buttons. Buttons don't show a hover colour, and slider thumbs keep the Windows look |
-
-The Go, Rust, C# and Julia versions were not built or run when this was added, so the first build is worth a look.
-
 ---
 
 ## C++ Controller
@@ -349,6 +293,73 @@ Requires [Go](https://go.dev/dl/) and, because Fyne uses cgo, a C compiler (Wind
 
 ---
 
+## Mind mode: she watches herself, and picks things up
+
+The **Mind** button (Python controller) hands the arm to her LLM mind: she looks, thinks out loud on screen, says what she's doing in her own voice (patient, dry, Zira slow and low), moves a joint, and remembers. Only on an x86 PC with 8 GB+ RAM and a GTX 1050 or better (`mind.py` checks), with Ollama's qwen3 (sized to the GPU) and a vision model (gemma3).
+
+- **She watches herself through a webcam** pointed at the arm (`--camera N`, default 0). The vision model lists what's in the picture and she decides from that list whether her arm is there. (Asked "is there a robot arm?", a small vision model says yes to a dark frame or an empty desk, so it's never asked that.)
+- **When she can't see herself she's very hesitant:** a dark, covered or blank picture, no camera, or no arm in what the model sees, and every move becomes one 3° nudge, whatever she planned, and she says why. Seeing herself, she moves in 10° steps.
+- **Pick something up:** choose what in the Mind panel: a **colour button** (red, orange, yellow, green, blue, purple), **click anything in the live camera preview** to take its colour, or **type what it is** in the text box (Enter). A colour is found with OpenCV in every frame and outlined in the preview; a typed thing is found in the vision model's list. Her mind gets where it is in the picture and how big, and a how-to (centre it with the base, open the claw, reach until it's big and low, close, lift), and works it out one move at a time.
+- Picking is new and needs tuning on the real arm: seeing the colour is reliable; getting the claw around it is the 4B model's job, and it's slow and clumsy at it.
+
+Requires `opencv-python` (in `requirements.txt`) and a USB webcam.
+
+---
+
+## Finding the arm's port
+
+Nothing here needs a hard-coded COM port. `scripts/arm/arm.ino` answers a one-word question, so a controller can find the arm by asking:
+
+```
+PC:   WHO
+COM6: I am Arm
+```
+
+Every controller does this when you leave out `--port`: it opens each port (the compiled controllers only try ports that look like Arduino adapters) at 115200 baud, waits about 2 seconds for the board to reset, sends `WHO`, and uses the port that answers `I am Arm`. If none answers it falls back to the old guess (the first port whose description looks like an Arduino, CH340, CP210x or FTDI adapter). `--port COM6` still overrides all of it, and `--list-ports` lists what's there.
+
+- **You must reflash** the board with the current `arm.ino` before it can answer.
+- **Sharing one PC with [DREAM](https://github.com/CursedPrograms/DREAM).** Her sensor board (`dream_sensors.ino`, 9600 baud) answers `WHO` with `I am Dream` the same way, so both projects can run from one computer and each finds its own board, whatever COM numbers Windows hands out. Only one program can hold a serial port, so run one controller per arm.
+- **Python:** `scripts/board_id.py` does the asking (`python scripts/board_id.py` lists every port and who answered). **C++, Go, Rust and Julia** ask only the ports that look like Arduino adapters, so they skip Bluetooth ports that can take a long time to open. **C#** can't read USB descriptions, so it asks every port at once.
+- Asking a port takes about 3 seconds, so `--port` is faster when you know it.
+
+---
+
+## Colour scheme
+
+Every UI takes its colours from one file, `colour_scheme.xml` in the repo root. Edit a value and restart the controller. The compiled controllers read it at start-up too, so colour changes need no rebuild (build once first to get the code that reads it).
+
+```xml
+<colour name="background" value="#33292F"/>
+<colour name="button_active" value="#9C0060"/>
+```
+
+Write each colour on its own line as `name="..." value="#RRGGBB"` (name first; the C++, Rust and Julia loaders read it line by line). A missing file, or a missing or malformed colour, falls back to the built-in default for that one colour.
+
+| Role | Default | Used for |
+|---|---|---|
+| `background` | `#33292F` | Window and page background |
+| `panel`, `border` | `#331F2B`, `#361529` | Rows, list boxes, outlines |
+| `text`, `text_dim` | `#FFFFFF`, `#C9B6C1` | Main text, status lines |
+| `button`, `button_hover`, `button_active`, `button_disabled` | `#361529`, `#691548`, `#9C0060`, `#331F2B` | Buttons (active = the selected mode) |
+| `accent`, `accent_hover` | `#9C0060`, `#C21F82` | Slider knobs, highlights, values |
+| `track`, `selected` | `#691548`, `#691548` | Slider track, the chosen macro |
+| `danger`, `danger_hover`, `warn` | `#963232`, `#AD3A3A`, `#F08C3C` | Record and reset, warnings |
+
+How each front end applies it:
+
+| UI | How |
+|---|---|
+| Python window (`controller.py`) | `scripts/colour_scheme.py` supplies the colours |
+| Web page | The controller serves `/colour_scheme.xml`; `app.js` applies it over `style.css`'s defaults |
+| Julia | Read into the drawing constants at start-up |
+| Rust (egui), Go (Fyne) | Applied as the toolkit's theme |
+| C# (Avalonia) | Overrides the Fluent theme's button, slider and list colours |
+| C++ (Win32) | Window, labels and list box, with owner-drawn buttons. Buttons don't show a hover colour, and slider thumbs keep the Windows look |
+
+The Go, Rust, C# and Julia versions were not built or run when this was added, so the first build is worth a look.
+
+---
+
 ## Fleet Integration
 
 This arm can join the [RIFT](https://github.com/CursedPrograms/RIFT) fleet dashboard, the same way MILA/WHIP/NORA/KIDA do. Both controllers' Fleet mode bridges RIFT's HTTP protocol to the Arduino's USB serial connection: it serves `/status`, `/cmd?motor=&angle=`, and `/reset`, and heartbeats a `/register` call to RIFT/NORA so this arm ("ARM", port `5011`) shows up in the dashboard.
@@ -401,8 +412,6 @@ Per-motor servo channel, angle range, resting angle, and invert flag all come fr
 
 ---
 
----
-
 ## Screenshots
 
 <div align="center">
@@ -415,21 +424,17 @@ Per-motor servo channel, angle range, resting angle, and invert flag all come fr
 
 ---
 
-<br>
+<div align="center">&copy; Cursed Entertainment 2026</div>
+
 <div align="center">
-© Cursed Entertainment 2026
+  <a href="https://cursed-entertainment.itch.io/">
+    <img src="https://github.com/CursedPrograms/cursedentertainment/raw/main/images/logos/logo-wide-grey.png" alt="Cursed Entertainment" width="250"/>
+  </a>
 </div>
-<br>
+
 <div align="center">
-<a href="https://cursed-entertainment.itch.io/" target="_blank">
-    <img src="https://github.com/CursedPrograms/cursedentertainment/raw/main/images/logos/logo-wide-grey.png"
-        alt="CursedEntertainment Logo" style="width:250px;">
-</a>
-</div>
-<br>
-<div align="center">
-  <a href="https://github.com/SynthWomb" target="_blank">
-    <img src="https://github.com/SynthWomb/synth.womb/blob/main/logos/synthwomb07.png" alt="SynthWomb" style="width:200px;"/>
+  <a href="https://github.com/SynthWomb">
+    <img src="https://github.com/SynthWomb/synth.womb/blob/main/logos/synthwomb07.png?raw=true" alt="SynthWomb" width="200"/>
   </a>
 </div>
 
