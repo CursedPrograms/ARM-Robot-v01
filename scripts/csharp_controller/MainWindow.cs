@@ -135,12 +135,15 @@ public sealed class MainWindow : Window
     readonly string _fleetLanIp = FleetServer.LocalLanIp();
 
     readonly DispatcherTimer _timer;
+    readonly ArmVoice _voice = new();
+    readonly Process? _ladder;
+    readonly ArmView _arm;
 
     public MainWindow(Options opts)
     {
         _opts = opts;
         Title = "Arm Controller (C#)";
-        Width = WindowWidth;
+        Width = WindowWidth + ArmView.PanelWidth;
         Height = WindowHeight;
         CanResize = false;
         Background = ColourScheme.Brush("background");
@@ -181,6 +184,14 @@ public sealed class MainWindow : Window
         _adopted = _remote == null;
 
         BuildControls();
+        _ladder = FleetLadder.Start(opts.Ladder);
+        _arm = Place(new ArmView(_motors, _geometry), WindowWidth + 8, 56);
+        var voiceBtn = MakeButton("VOICE ON", WindowWidth + 8, 12, 150, 34);
+        voiceBtn.Click += (_, _) =>
+        {
+            _voice.On = !_voice.On;
+            voiceBtn.Content = _voice.On ? "VOICE ON" : "VOICE OFF";
+        };
         Content = _canvas;
         RefreshMacroList();
         ApplyModeVisibility();
@@ -500,6 +511,7 @@ public sealed class MainWindow : Window
     protected override void OnClosed(EventArgs e)
     {
         _timer.Stop();
+        try { _ladder?.Kill(); } catch (Exception) { }
         _fleet.Dispose();
         _remote?.Dispose();
         _joystick?.Dispose();
@@ -684,6 +696,13 @@ public sealed class MainWindow : Window
     }
 
     void TickCore()
+    {
+        TickDrive();
+        lock (_fleetState.Lock) _arm.Show(new Dictionary<int, int>(_fleetState.Angles));
+        _voice.Watch(_mode.ToString().ToLowerInvariant(), _recording, _playing, _clawClosed);
+    }
+
+    void TickDrive()
     {
         CheckDevices();
         RepeatHeldKey();

@@ -10,7 +10,7 @@ where g++ >nul 2>nul
 if %errorlevel%==0 (
     echo Building with g++...
     windres controller.rc -O coff -o build\controller_res.o
-    g++ -std=c++17 -O2 -static -o build\controller.exe build\controller_res.o app.cpp motor_config.cpp kinematics.cpp serial_port.cpp joystick.cpp keys_window.cpp macros.cpp fleet_server.cpp remote_arm.cpp colour_scheme.cpp -lws2_32 -lsetupapi -lwinmm -lcomctl32 -lgdi32 -ladvapi32
+    g++ -std=c++17 -O2 -static -o build\controller.exe build\controller_res.o app.cpp motor_config.cpp kinematics.cpp extras.cpp serial_port.cpp joystick.cpp keys_window.cpp macros.cpp fleet_server.cpp remote_arm.cpp colour_scheme.cpp -lws2_32 -lsetupapi -lwinmm -lcomctl32 -lgdi32 -ladvapi32
     if %errorlevel%==0 (
         echo.
         echo Built scripts\cpp_controller\build\controller.exe - run it with cpp_controller.bat

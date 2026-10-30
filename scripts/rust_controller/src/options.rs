@@ -22,6 +22,7 @@ pub struct Options {
     pub rift_port: u16,
     pub no_register: bool,
     pub serve: bool,
+    pub ladder: bool,
     pub connect: Option<String>,
 }
 
@@ -40,6 +41,7 @@ impl Default for Options {
             rift_port: 5000,
             no_register: false,
             serve: false,
+            ladder: false,
             connect: None,
         }
     }
@@ -56,6 +58,7 @@ impl Options {
                 "--list-ports" => o.list_ports = true,
                 "--no-register" => o.no_register = true,
                 "--serve" => o.serve = true,
+                "--ladder" => o.ladder = true,
                 "--port" => o.port = Some(value(&a)?),
                 "--connect" => o.connect = Some(value(&a)?),
                 "--rift-host" => o.rift_host = value(&a)?,

@@ -15,6 +15,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -135,6 +136,9 @@ type App struct {
 	keysWin    fyne.Window // the F1 window while it's open
 
 	fleet      *FleetServer
+	voice      *voice
+	ladder     *exec.Cmd
+	arm        *armView
 	fleetError string
 	lanIP      string
 
@@ -345,8 +349,17 @@ func (a *App) buildUI() fyne.CanvasObject {
 	}
 
 	a.applyMode()
-	return container.NewVBox(title, a.statusLbl, modeRow, transport, macroBox,
+	a.voice = newVoice()
+	a.ladder = startLadder(a.opts.Ladder)
+	a.arm = newArmView()
+	voiceBtn := widget.NewButton("VOICE ON", nil)
+	voiceBtn.OnTapped = func() {
+		a.voice.on = !a.voice.on
+		voiceBtn.SetText(map[bool]string{true: "VOICE ON", false: "VOICE OFF"}[a.voice.on])
+	}
+	left := container.NewVBox(container.NewBorder(nil, nil, nil, voiceBtn, title), a.statusLbl, modeRow, transport, macroBox,
 		a.warnText, a.sliderBox, a.ikBox, a.linesBox)
+	return container.NewBorder(nil, nil, nil, a.arm.object(), left)
 }
 
 func show(o fyne.CanvasObject, on bool) {
@@ -735,6 +748,13 @@ func (a *App) setShared(byMotor map[int]int) {
 }
 
 func (a *App) tick() {
+	a.tickCore()
+	a.arm.update(a.motors, a.geometry, a.shared.Snapshot())
+	a.voice.watch(voiceState{map[Mode]string{ModeJoystick: "joystick", ModeSlider: "slider", ModeIK: "ik", ModeFleet: "fleet"}[a.mode],
+		a.recording, a.playing, a.ik.clawClosed})
+}
+
+func (a *App) tickCore() {
 	a.checkDevices()
 	a.repeatHeldKey()
 
@@ -888,7 +908,7 @@ func (a *App) run() {
 	a.fyneApp.Settings().SetTheme(newSchemeTheme())
 	a.win = a.fyneApp.NewWindow("Arm Controller (Go)")
 	a.win.SetContent(container.NewPadded(a.buildUI()))
-	a.win.Resize(fyne.NewSize(620, 720))
+	a.win.Resize(fyne.NewSize(620+armPanelW, 720))
 	if dc, ok := a.win.Canvas().(desktop.Canvas); ok {
 		dc.SetOnKeyDown(a.onKeyDown)
 		dc.SetOnKeyUp(a.onKeyUp)
@@ -923,6 +943,9 @@ func (a *App) run() {
 }
 
 func (a *App) close() {
+	if a.ladder != nil {
+		_ = a.ladder.Process.Kill()
+	}
 	if a.remote != nil {
 		a.remote.Close()
 	}

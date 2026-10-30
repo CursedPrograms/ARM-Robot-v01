@@ -182,6 +182,10 @@ The same list opens in its own window: **F1** in any of the controllers (Python,
   `scripts/controller_settings.json` for you to change.
 - **VOICE**: she talks through this PC outside MIND too (Zira, slow and low, dry): modes, recording, playback,
   the claw. Her MIND log: `~/.robot_minds/logs/ARM-<date>.log`.
+- **The C++, C#, Rust, Go and Julia controllers** draw her arm the same way and have VOICE too (a VOICE button;
+  `scripts/arm_voice.ps1`, so Windows only; `ARM_VOICE=0` keeps her quiet). `--ladder` or `FLEET_LADDER=1`
+  joins the fleet's WiFi through `scripts/fleet_ladder.py`, so those two need Python. MIND stays with the
+  Python controller: `mind.py` is the fleet's one shared file. VOICE's on / off isn't saved on these five.
 - Every launcher comes in `.bat`, `.ps1` and `.sh` (the C++ controller is a Windows program: its `.sh` says so).
 
 ## Finding the arm's port

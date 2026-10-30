@@ -12,6 +12,7 @@
 
 mod app;
 mod config;
+mod extras;
 mod fleet;
 mod joystick;
 mod keys_window;
@@ -60,7 +61,7 @@ fn main() -> eframe::Result<()> {
 
     let app = app::App::new(opts);
     let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([620.0, 640.0]).with_title("Arm Controller (Rust)"),
+        viewport: egui::ViewportBuilder::default().with_inner_size([620.0 + extras::PANEL_W, 640.0]).with_title("Arm Controller (Rust)"),
         ..Default::default()
     };
     eframe::run_native("Arm Controller (Rust)", native_options, Box::new(move |cc| {

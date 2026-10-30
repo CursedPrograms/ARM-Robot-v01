@@ -38,6 +38,7 @@
 #include "kinematics.h"
 #include "macros.h"
 #include "colour_scheme.h"
+#include "extras.h"
 #include "motor_config.h"
 #include "remote_arm.h"
 #include "serial_port.h"
@@ -109,10 +110,12 @@ enum ControlId {
     ID_ELBOW_TOGGLE,
     ID_CLAW_TOGGLE,
     ID_HOLD_BOX,
+    ID_VOICE,
     ID_TIMER = 1,
 };
 
 struct Args {
+    bool ladder = false;
     std::string port;
     int baud = 115200;
     double rateHz = 30.0;
@@ -262,6 +265,9 @@ struct App {
     // ---- macros ----
     std::vector<MacroFile> macros;
     int selectedMacro = -1;
+    ArmVoice voice;
+    HWND btnVoice = nullptr;
+    std::map<int, int> armDrawn;
     bool recording = false;
     std::vector<MacroStep> recordSteps;
     Clock::time_point recordStart;
@@ -786,6 +792,10 @@ void onCommand(App& app, WPARAM wParam) {
             app.clawClosed = !app.clawClosed;
             SetWindowTextA(app.btnClaw, app.clawClosed ? "Claw: Closed" : "Claw: Open");
             break;
+        case ID_VOICE:
+            app.voice.on = !app.voice.on;
+            SetWindowTextA(app.btnVoice, app.voice.on ? "VOICE ON" : "VOICE OFF");
+            break;
         case ID_RECORD:
             if (!app.recording) {
                 app.recording = true;
@@ -923,9 +933,38 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_COMMAND:
             onCommand(g_app, wParam);
             return 0;
-        case WM_TIMER:
+        case WM_TIMER: {
             tick(g_app);
+            std::map<int, int> angles;
+            {
+                std::lock_guard<std::mutex> lock(g_app.fleetState.mutex);
+                angles = g_app.fleetState.angles;
+            }
+            if (angles != g_app.armDrawn) {
+                g_app.armDrawn = angles;
+                RECT panel = {WINDOW_WIDTH, 56, WINDOW_WIDTH + ARM_PANEL_W, WINDOW_HEIGHT};
+                InvalidateRect(hwnd, &panel, FALSE);
+            }
+            static const char* const MODE_NAMES[] = {"joystick", "slider", "ik", "fleet"};
+            g_app.voice.watch(MODE_NAMES[static_cast<int>(g_app.mode)], g_app.recording, g_app.playing, g_app.clawClosed);
             return 0;
+        }
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC dc = BeginPaint(hwnd, &ps);
+            RECT area = {WINDOW_WIDTH, 0, WINDOW_WIDTH + ARM_PANEL_W, WINDOW_HEIGHT};
+            HDC mem = CreateCompatibleDC(dc);       // off-screen: the arm doesn't flicker as it moves
+            HBITMAP bmp = CreateCompatibleBitmap(dc, WINDOW_WIDTH + ARM_PANEL_W, WINDOW_HEIGHT);
+            HGDIOBJ old = SelectObject(mem, bmp);
+            FillRect(mem, &area, backgroundBrush());
+            drawArm(mem, area, g_app.motors, g_app.geometry, g_app.armDrawn);
+            BitBlt(dc, area.left, area.top, ARM_PANEL_W, WINDOW_HEIGHT, mem, area.left, area.top, SRCCOPY);
+            SelectObject(mem, old);
+            DeleteObject(bmp);
+            DeleteDC(mem);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
         case WM_DEVICECHANGE: // a joystick or gamepad may have come or gone
             g_app.devicesChanged = true;
             return TRUE;
@@ -1010,6 +1049,7 @@ bool parseArgs(int argc, char** argv, Args& out) {
         else if (a == "--no-register") out.noRegister = true;
         else if (a == "--list-ports") out.listPorts = true;
         else if (a == "--serve") out.serve = true;
+        else if (a == "--ladder") out.ladder = true;
         else if (a == "--no-serve") out.noServe = true;
         else if (a == "--stick-rest") out.stickRest = true;
         else if (a == "--connect") out.connect = next("--connect");
@@ -1105,7 +1145,7 @@ int main(int argc, char** argv) {
     wc.hbrBackground = backgroundBrush();
     RegisterClassA(&wc);
 
-    RECT rect = {0, 0, WINDOW_WIDTH, WINDOW_HEIGHT};
+    RECT rect = {0, 0, WINDOW_WIDTH + ARM_PANEL_W, WINDOW_HEIGHT};
     AdjustWindowRect(&rect, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE);
 
     app.hwnd = CreateWindowExA(0, wc.lpszClassName, "Arm Controller",
@@ -1118,6 +1158,8 @@ int main(int argc, char** argv) {
     }
 
     createControls(app);
+    app.btnVoice = makeButton(app.hwnd, ID_VOICE, WINDOW_WIDTH + 8, 12, 150, 32, "VOICE ON");
+    startLadder(app.args.ladder);
     if (app.mode == Mode::Fleet || app.args.serve) ensureFleetStarted(app);
 
     ShowWindow(app.hwnd, SW_SHOW);

@@ -22,6 +22,7 @@ public sealed class Options
     public int RiftPort { get; set; } = 5000;
     public bool NoRegister { get; set; }
     public bool Serve { get; set; }
+    public bool Ladder { get; set; }
     public string? Connect { get; set; }
 
     public static bool TryParse(string[] args, out Options options, out string error)
@@ -51,6 +52,7 @@ public sealed class Options
                 case "--list-ports": o.ListPorts = true; break;
                 case "--no-register": o.NoRegister = true; break;
                 case "--serve": o.Serve = true; break;
+                case "--ladder": o.Ladder = true; break;
                 case "--connect": o.Connect = value; break;
                 case "--port": o.Port = value; break;
                 case "--rift-host": o.RiftHost = value!; break;

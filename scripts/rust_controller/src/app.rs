@@ -12,6 +12,7 @@
 //! all (keys_window.rs, from scripts/keymap.json).
 
 use crate::config::{self, Geometry, Motors};
+use crate::extras;
 use crate::fleet::{self, FleetServer};
 use crate::joystick::{self, Joystick};
 use crate::keys_window::{self, Keymap};
@@ -119,6 +120,8 @@ pub struct App {
     keys_window: Option<Keymap>, // open while Some (F1)
 
     fleet: Option<FleetServer>,
+    voice: extras::Voice,
+    _ladder: Option<extras::Ladder>,
     fleet_error: String,
     lan_ip: String,
 
@@ -155,6 +158,7 @@ fn axis_to_angle(value: f64, lo: i32, hi: i32, rest: i32) -> i32 {
 impl App {
     pub fn new(opts: Options) -> Self {
         let motors = Arc::new(config::load_motors());
+        let ladder = extras::start_ladder(opts.ladder);
         let geometry = config::load_geometry();
         let reach = geometry.upper_arm + geometry.forearm + geometry.wrist;
         let reach = if reach > 0.0 { reach } else { 300.0 } as i32;
@@ -221,6 +225,8 @@ impl App {
             prev_forward: false,
             prev_backward: false,
             fleet: None,
+            voice: extras::Voice::new(),
+            _ladder: ladder,
             fleet_error: String::new(),
             lan_ip: fleet::local_lan_ip(),
             slider_vals: angles,
@@ -696,7 +702,12 @@ impl App {
     // =====================================================================
 
     fn draw(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Arm Controller (Rust)");
+        ui.horizontal(|ui| {
+            ui.heading("Arm Controller (Rust)");
+            if ui.button(if self.voice.on { "VOICE ON" } else { "VOICE OFF" }).clicked() {
+                self.voice.on = !self.voice.on;
+            }
+        });
         ui.label(egui::RichText::new(&self.status).small().weak());
         ui.add_space(4.0);
 
@@ -821,6 +832,10 @@ impl eframe::App for App {
         self.check_devices();
         self.handle_keys(ctx);
 
+        egui::SidePanel::right("arm").exact_width(extras::PANEL_W).resizable(false).show(ctx, |ui| {
+            let angles = lock(&self.shared).angles.clone();
+            extras::draw_arm(ui, &self.motors, &self.geometry, &angles);
+        });
         egui::CentralPanel::default().show(ctx, |ui| self.draw(ui));
         if let Some(keymap) = &self.keys_window {
             if !keys_window::show(ctx, keymap) {
@@ -828,6 +843,8 @@ impl eframe::App for App {
             }
         }
         self.step();
+        let mode = match self.mode { Mode::Joystick => "joystick", Mode::Slider => "slider", Mode::Ik => "ik", Mode::Fleet => "fleet" };
+        self.voice.watch(mode, self.recording, self.playing, self.ik.claw_closed);
 
         let rate = if self.opts.rate > 0.0 { self.opts.rate } else { 30.0 };
         ctx.request_repaint_after(Duration::from_secs_f64(1.0 / rate));

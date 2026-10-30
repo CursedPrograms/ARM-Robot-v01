@@ -29,6 +29,7 @@ type Options struct {
 	RiftPort      int
 	NoRegister    bool
 	Serve         bool
+	Ladder        bool
 	Connect       string
 }
 
@@ -64,6 +65,8 @@ func parseOptions(args []string) (Options, error) {
 			o.NoRegister = true
 		case "--serve":
 			o.Serve = true
+		case "--ladder":
+			o.Ladder = true
 		case "--port":
 			o.Port, err = value()
 		case "--connect":

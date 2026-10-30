@@ -410,12 +410,14 @@ macro_row_rect(i) = (30, MACRO_LIST_Y + i * MACRO_ROW_H, 500, MACRO_ROW_H)
 # CLI args
 # =========================================================================
 
+include(joinpath(@__DIR__, "extras.jl"))   # after the drawing functions it uses
+
 function parse_args(argv)
     opts = Dict{Symbol,Any}(
         :device => -1, :port => nothing, :baud => 115200, :rate => 30.0,
         :mode => nothing, :list => false, :list_ports => false,
         :fleet_port => DEFAULT_FLEET_PORT, :rift_host => "127.0.0.1",
-        :rift_port => 5000, :no_register => false, :serve => false, :connect => nothing,
+        :rift_port => 5000, :no_register => false, :serve => false, :ladder => false, :connect => nothing,
     )
     i = 1
     n = length(argv)
@@ -453,6 +455,8 @@ function parse_args(argv)
             opts[:no_register] = true
         elseif a == "--serve"
             opts[:serve] = true
+        elseif a == "--ladder"
+            opts[:ladder] = true
         elseif a == "--connect"
             opts[:connect] = val
         else
@@ -515,7 +519,7 @@ function main()
     println(status)
 
     window = SDL_CreateWindow("Arm Controller (Julia)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                               WINDOW_WIDTH, WINDOW_HEIGHT, SDL_WINDOW_SHOWN)
+                               WINDOW_WIDTH + ARM_PANEL_W, WINDOW_HEIGHT, SDL_WINDOW_SHOWN)
     window == C_NULL && error("Could not create window: $(unsafe_string(SDL_GetError()))")
     main_id = SDL_GetWindowID(window)
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED)
@@ -587,6 +591,9 @@ function main()
         "fleet" => (416, MODE_BUTTON_Y, 122, 34),
     )
     mode_labels = Dict("joystick" => "Joystick", "slider" => "Sliders", "ik" => "IK", "fleet" => "Fleet")
+    voice = ArmVoice()
+    ladder = start_ladder(args[:ladder])
+    voice_rect = (WINDOW_WIDTH + 8, 12, 150, 32)
     record_rect = (30, TRANSPORT_BUTTON_Y, 160, 30)
     play_rect = (200, TRANSPORT_BUTTON_Y, 160, 30)
     elbow_rect = (30, MARGIN_TOP + 5 * ROW_HEIGHT, 150, 30)
@@ -688,7 +695,9 @@ function main()
                             mode = play_prev_mode
                         end
                     else
-                        if point_in(mx, my, mode_rects["joystick"]) && joystick_available
+                        if point_in(mx, my, voice_rect)
+                            voice.on = !voice.on
+                        elseif point_in(mx, my, mode_rects["joystick"]) && joystick_available
                             mode = "joystick"
                         elseif point_in(mx, my, mode_rects["slider"])
                             mode = "slider"
@@ -875,6 +884,9 @@ function main()
             SDL_RenderClear(renderer)
 
             draw_text!(renderer, font, "Arm Controller", 20, 12, TEXT_COLOR)
+            draw_button!(renderer, font, voice_rect, voice.on ? "VOICE ON" : "VOICE OFF", mx, my; active=voice.on)
+            draw_arm!(renderer, small_font, motors, geometry, lock(() -> copy(fleet_state.angles), fleet_state.lock), WINDOW_WIDTH)
+            watch!(voice, mode, recording, playing, claw_closed)
             draw_text!(renderer, small_font, status, 20, 38, STATUS_COLOR)
 
             for (name, rect) in mode_rects
