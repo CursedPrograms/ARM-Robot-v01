@@ -33,6 +33,10 @@
 
 ---
 
+<div align="center">
+  <img src="images/screenshots/controller.gif" alt="ARM's Python controller, driving a pretend ARM" width="420"/>
+</div>
+
 **Windows controller:** [`builds/ARM-Controller.exe`](builds/ARM-Controller.exe) shows ARM's own web page in a window, so it always matches the page. Source: `scripts/web_controller`.
 
 ## Related Projects
