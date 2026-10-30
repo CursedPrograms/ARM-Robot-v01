@@ -47,6 +47,8 @@
 
 ---
 
+**Keyboard on her web page:** the same keys as her Python controller: A D, W S, R F, T G and Q E move a joint 5 degrees (1 with Shift), Space holds the claw shut, Home is her rest pose.
+
 ## Related Projects
 
 

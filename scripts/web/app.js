@@ -146,3 +146,32 @@ resetAllBtn.addEventListener("click", async () => {
 
 fetchStatus();
 setInterval(fetchStatus, STATUS_POLL_MS);
+
+// Her keys, as on her Python controller: 5 degrees a press, 1 with Shift, held to repeat.
+// Space holds the claw shut, Home is her rest pose.
+const KEYS = { a: [1, -1], d: [1, 1], w: [2, 1], s: [2, -1], r: [3, 1], f: [3, -1], t: [4, 1], g: [4, -1], q: [5, -1], e: [5, 1] };
+
+function setMotor(n, angle) {
+  const state = sliders[n];
+  if (!state) return;
+  state.input.value = angle;     // the slider keeps it within her limits
+  state.valueEl.textContent = `${state.input.value}\u00b0`;
+  sendCommand(n, state.input.value);
+}
+
+document.addEventListener("keydown", (e) => {
+  const k = e.key.toLowerCase();
+  if (k === " ") {
+    e.preventDefault();
+    if (!e.repeat && sliders[6]) setMotor(6, sliders[6].input.max);
+  } else if (k === "home") {
+    e.preventDefault();
+    if (!e.repeat) resetAllBtn.click();
+  } else if (KEYS[k] && sliders[KEYS[k][0]]) {
+    const [n, way] = KEYS[k];
+    setMotor(n, Number(sliders[n].input.value) + way * (e.shiftKey ? 1 : 5));
+  }
+});
+document.addEventListener("keyup", (e) => {
+  if (e.key === " " && sliders[6]) setMotor(6, sliders[6].input.min);
+});
