@@ -197,6 +197,9 @@ def apply_theme(name, custom=None):
 apply_theme(SETTINGS.theme, SETTINGS.get("custom"))
 
 
+ORBIT = [0.0, math.pi / 2]   # her 3D view: yaw and tilt in radians (tilt 90 degrees = straight from above)
+
+
 def draw_arm(screen, font, small_font, motors, geometry, angles, x0):
     """Her arm, drawn from her own geometry (config.json) and joint maths (IK_controller.raw_to_deg):
     from the side (base, shoulder, elbow, wrist, claw; her reach as a circle) and from above (the base
@@ -236,17 +239,24 @@ def draw_arm(screen, font, small_font, motors, geometry, angles, x0):
                                                      tip[1] - int(14 * math.sin(a3 + sgn * 0.5)) + sgn * spread // 3), 3)
     screen.set_clip(None)
     screen.blit(small_font.render(f"tip  r {j[-1][0]:.0f}  z {j[-1][1]:.0f} mm", True, TEXT_COLOR), (panel.x + 10, oy + 10))
-    # from above: the base's turn and how far out the tip is
+    # in 3D, turned by dragging (ORBIT: starts from above): the desk's reach circle and her joints
     cy, cx = panel.y + 470, panel.x + panel.w // 2
-    screen.blit(small_font.render("from above", True, STATUS_COLOR), (panel.x + 10, cy - 120))
-    ts = 110 / reach   # from above: her whole reach in a 110 px circle
-    pygame.draw.circle(screen, TRACK_COLOR, (cx, cy), 110, 1)
-    rr = j[-1][0] * ts
-    tipxy = (int(cx + rr * math.sin(base)), int(cy - rr * math.cos(base)))
-    pygame.draw.line(screen, KNOB_COLOR, (cx, cy), tipxy, 6)
-    pygame.draw.circle(screen, ACCENT_COLOR, (cx, cy), 9)
-    pygame.draw.circle(screen, ACCENT_COLOR, tipxy, 5)
-    screen.blit(small_font.render(f"base {math.degrees(base):+.0f} deg", True, TEXT_COLOR), (panel.x + 10, cy + 70))
+    screen.blit(small_font.render("drag to turn her", True, STATUS_COLOR), (panel.x + 10, cy - 120))
+    ts = 100 / reach
+    cyaw, syaw, ctilt, stilt = math.cos(ORBIT[0]), math.sin(ORBIT[0]), math.cos(ORBIT[1]), math.sin(ORBIT[1])
+
+    def view(x, y, z):
+        """A point (mm, x right, y ahead, z up) on the panel: turned by ORBIT's yaw, then tipped by its tilt."""
+        x, y = x * cyaw - y * syaw, x * syaw + y * cyaw
+        return int(cx + x * ts), int(cy - (y * stilt + z * ctilt) * ts)
+
+    ring = [view(reach * math.cos(i * math.pi / 24), reach * math.sin(i * math.pi / 24), 0) for i in range(48)]
+    pygame.draw.lines(screen, TRACK_COLOR, True, ring, 1)
+    pts = [view(r * math.sin(base), r * math.cos(base), z) for r, z in j]
+    pygame.draw.lines(screen, KNOB_COLOR, False, pts, 6)
+    for p3 in pts[1:]:
+        pygame.draw.circle(screen, ACCENT_COLOR, p3, 5)
+    screen.blit(small_font.render(f"base {math.degrees(base):+.0f} deg", True, TEXT_COLOR), (panel.x + 10, cy + 110))
 
 
 def axis_to_angle(value, lo, hi, rest, deadzone=DEADZONE):
@@ -1425,6 +1435,9 @@ def main():
                     elif event.unicode and event.unicode.isprintable() and len(text_box["text"]) < 40:
                         text_box["text"] += event.unicode
                     continue
+                if event.type == pygame.MOUSEMOTION and event.buttons[0] and event.pos[0] > WINDOW_WIDTH and event.pos[1] > WINDOW_HEIGHT - 300:
+                    ORBIT[0] += event.rel[0] * 0.01                                       # drag her 3D view round
+                    ORBIT[1] = max(0.0, min(math.pi / 2, ORBIT[1] + event.rel[1] * 0.01))
                 if mode == "mind" and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                     pos = event.pos
                     picked = next(((n, h) for r, n, h in mind_hits["colours"] if r.collidepoint(pos)), None)
