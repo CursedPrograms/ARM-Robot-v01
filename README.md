@@ -175,7 +175,7 @@ The same list opens in its own window: **F1** in any of the controllers (Python,
 
 - **Her arm, drawn**: a panel beside the controls draws her from her own geometry (`config.json`) and joint
   maths (`IK_controller.py`): from the side (base, shoulder, elbow, wrist, claw, her reach as a circle) and
-  from above (the base turning), following every command. With no Arduino plugged in it's her emulator:
+  in 3D, starting from above: drag it to turn her. It follows every command. With no Arduino plugged in it's her emulator:
   everything still works, and you see what she would do. Until `kinematicZero` is calibrated she draws her
   rest pose as level.
 - **THEME**: DEFAULT, LIGHT or CUSTOM, all from `colour_scheme.xml`; CUSTOM puts its colours in
@@ -421,6 +421,6 @@ Per-motor servo channel, angle range, resting angle, and invert flag all come fr
 ## The DREAM Robotics ecosystem
 
 **Minds** — [DREAM](https://github.com/CursedPrograms/DREAM) companion · [TINA](https://github.com/CursedPrograms/TINA) engineer · [NINA](https://github.com/CursedPrograms/NINA) caretaker · [RIFT](https://github.com/CursedPrograms/RIFT) fleet hub · [LYCEA](https://github.com/CursedPrograms/LYCEA) training school  
-**Robots** — [NORA](https://github.com/CursedPrograms/NORA-Robot-v00) · [MILA](https://github.com/CursedPrograms/MILA-Robot-v00) · [WHIP](https://github.com/CursedPrograms/WHIP-Robot-v00) · [KIDA-00](https://github.com/CursedPrograms/KIDA-Robot-v00) · [KIDA-01](https://github.com/CursedPrograms/KIDA-Robot-v01) · [IDA](https://github.com/CursedPrograms/IDA-Robot-v00) · [ARM](https://github.com/CursedPrograms/ARM-Robot-v01) · [NIKA](https://github.com/CursedPrograms/NIKA-Robot-v00)  
+**Robots** — [NORA](https://github.com/CursedPrograms/NORA-Robot-v00) · [MILA](https://github.com/CursedPrograms/MILA-Robot-v00) · [WHIP](https://github.com/CursedPrograms/WHIP-Robot-v00) · [KIDA-00](https://github.com/CursedPrograms/KIDA-Robot-v00) · [KIDA-01](https://github.com/CursedPrograms/KIDA-Robot-v01) · [IDA](https://github.com/CursedPrograms/IDA-Robot-v00) · [ARM](https://github.com/CursedPrograms/ARM-Robot-v01) · [NIKA](https://github.com/CursedPrograms/NIKA-Robot-v00) · [ARIA](https://github.com/CursedPrograms/ARIA-Robot-v00)  
 **Remotes** — [RITA](https://github.com/CursedPrograms/RITA) handheld remote  
 <!-- DREAM-ECOSYSTEM:END -->
