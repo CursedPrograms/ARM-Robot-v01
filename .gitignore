@@ -60,3 +60,7 @@ venv/
 
 # controller theme / voice / custom colours (per PC)
 scripts/controller_settings.json
+
+# Controllers, built and kept
+!builds/
+!builds/*.exe
