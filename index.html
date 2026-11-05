@@ -23,9 +23,9 @@
     <ul>
       <li><a href="#overview">Overview</a></li>
       <li><a href="#hardware">Hardware</a></li>
+      <li><a href="#fleet">Fleet</a></li>
       <li><a href="#controls">Controls</a></li>
       <li><a href="#controllers">Controllers</a></li>
-      <li><a href="#fleet">Fleet</a></li>
       <li><a href="#screens">Screens</a></li>
       <li><a href="https://github.com/CursedPrograms/ARM-Robot-v01">GitHub</a></li>
     </ul>
@@ -61,7 +61,6 @@
 </header>
 
 <main>
-
 <section id="overview">
   <div class="wrap">
     <h2>Overview</h2>
@@ -151,6 +150,25 @@
   </div>
 </section>
 
+<section id="fleet">
+  <div class="wrap">
+    <h2>Fleet</h2>
+    <h3 class="title">Join RIFT, or use your phone</h3>
+    <p class="muted">Whenever the Python or C++ controller runs, in any mode, it bridges <a href="https://github.com/CursedPrograms/RIFT">RIFT</a>'s HTTP protocol to the Arduino: it serves <code>/status</code>, <code>/cmd?motor=&amp;angle=</code>, <code>/reset</code> and <code>/chirp</code>, and heartbeats <code>/register</code> so ARM shows up in the dashboard on port <code>5011</code> (<code>--no-serve</code> keeps her to yourself). <code>run.bat</code> is the entry point: it sets up its own <code>venv</code> and installs the requirements the first time.</p>
+<pre><span class="p">&gt;</span> run.bat --list-ports
+<span class="p">&gt;</span> run.bat --port COM6 --mode fleet</pre>
+    <p class="muted">The same server hosts a per-motor slider page: open <code>http://&lt;this machine&gt;:5011/</code> on any phone or browser on the network, and it stays in sync with the desktop window.</p>
+    <h3 class="sub">Talking, in Brainfuck</h3>
+    <p class="muted">Every phrase is a <strong>Brainfuck</strong> program that prints its words &mdash; hello is <code>++++++++[&gt;+++++++++++++&lt;-]&gt;.+.</code> &rarr; <code>hi</code> &mdash; and a robot says it by beeping the program on its buzzer, one tone per symbol, in its own voice. <a href="https://cursedprograms.github.io/RIFT/">RIFT</a> runs the conversations and asks each robot to speak with <code>GET /chirp?u=&lt;0-13&gt;</code> (phrases 0&ndash;6, replies 7&ndash;13). ARM&rsquo;s voice is a passive buzzer on <strong>D8</strong> (the other leg to GND), a little lower than the others; the controller passes <code>TALK:&lt;u&gt;</code> to <code>arm.ino</code>.</p>
+
+    <h3 class="sub">Inverse kinematics</h3>
+    <p class="muted">ARM is the YFROBOT / Makerfabs 6-DOF disc-arm frame. Its link lengths in <code>config.json</code> come from the kit&rsquo;s dimension drawing: 72&nbsp;mm from the table to the shoulder pivot, then 104 (upper arm), 143 (forearm) and 173&nbsp;mm (wrist to closed fingertips). IK measures each joint from an optional per-motor <code>kinematicZero</code> &mdash; the raw angle with the base forward, upper arm level and forearm and wrist in line &mdash; and falls back to the rest pose until that&rsquo;s been calibrated.</p>
+    <h3 class="sub">Several controllers on one arm</h3>
+    <p class="muted">Run one controller as the hub (the one with the Arduino plugged in and <code>--serve</code> on), and connect others with <code>--connect http://&lt;hub&gt;:5011</code>. They mirror the hub's angles ten times a second and send changes back, across languages. Connecting never moves the arm.</p>
+    <p class="note"><strong>Sharing a PC with DREAM?</strong> Her sensor board answers <code>WHO</code> with <code>I am Dream</code>, so both projects find their own boards whatever COM numbers Windows hands out. Only one program can hold a serial port, so run one controller per arm.</p>
+  </div>
+</section>
+
 <section id="controls">
   <div class="wrap">
     <h2>Controls</h2>
@@ -221,25 +239,6 @@
 <span class="p">&gt;</span> cpp_controller.bat --port COM6 --serve        <span class="c"># drive her and share the angles</span>
 <span class="p">$</span> python scripts/controller.py --connect http://192.168.0.10:5011   <span class="c"># a second window</span></pre>
     <p class="muted">Leave out <code>--port</code> and the controller asks each port <code>WHO</code> and uses the one that answers <code>I am Arm</code>. That takes about 3&nbsp;s, so <code>--port</code> is faster if you know it. Joystick support in Rust and Go needs the SDL2 shared library.</p>
-  </div>
-</section>
-
-<section id="fleet">
-  <div class="wrap">
-    <h2>Fleet</h2>
-    <h3 class="title">Join RIFT, or use your phone</h3>
-    <p class="muted">Whenever the Python or C++ controller runs, in any mode, it bridges <a href="https://github.com/CursedPrograms/RIFT">RIFT</a>'s HTTP protocol to the Arduino: it serves <code>/status</code>, <code>/cmd?motor=&amp;angle=</code>, <code>/reset</code> and <code>/chirp</code>, and heartbeats <code>/register</code> so ARM shows up in the dashboard on port <code>5011</code> (<code>--no-serve</code> keeps her to yourself). <code>run.bat</code> is the entry point: it sets up its own <code>venv</code> and installs the requirements the first time.</p>
-<pre><span class="p">&gt;</span> run.bat --list-ports
-<span class="p">&gt;</span> run.bat --port COM6 --mode fleet</pre>
-    <p class="muted">The same server hosts a per-motor slider page: open <code>http://&lt;this machine&gt;:5011/</code> on any phone or browser on the network, and it stays in sync with the desktop window.</p>
-    <h3 class="sub">Talking, in Brainfuck</h3>
-    <p class="muted">Every phrase is a <strong>Brainfuck</strong> program that prints its words &mdash; hello is <code>++++++++[&gt;+++++++++++++&lt;-]&gt;.+.</code> &rarr; <code>hi</code> &mdash; and a robot says it by beeping the program on its buzzer, one tone per symbol, in its own voice. <a href="https://cursedprograms.github.io/RIFT/">RIFT</a> runs the conversations and asks each robot to speak with <code>GET /chirp?u=&lt;0-13&gt;</code> (phrases 0&ndash;6, replies 7&ndash;13). ARM&rsquo;s voice is a passive buzzer on <strong>D8</strong> (the other leg to GND), a little lower than the others; the controller passes <code>TALK:&lt;u&gt;</code> to <code>arm.ino</code>.</p>
-
-    <h3 class="sub">Inverse kinematics</h3>
-    <p class="muted">ARM is the YFROBOT / Makerfabs 6-DOF disc-arm frame. Its link lengths in <code>config.json</code> come from the kit&rsquo;s dimension drawing: 72&nbsp;mm from the table to the shoulder pivot, then 104 (upper arm), 143 (forearm) and 173&nbsp;mm (wrist to closed fingertips). IK measures each joint from an optional per-motor <code>kinematicZero</code> &mdash; the raw angle with the base forward, upper arm level and forearm and wrist in line &mdash; and falls back to the rest pose until that&rsquo;s been calibrated.</p>
-    <h3 class="sub">Several controllers on one arm</h3>
-    <p class="muted">Run one controller as the hub (the one with the Arduino plugged in and <code>--serve</code> on), and connect others with <code>--connect http://&lt;hub&gt;:5011</code>. They mirror the hub's angles ten times a second and send changes back, across languages. Connecting never moves the arm.</p>
-    <p class="note"><strong>Sharing a PC with DREAM?</strong> Her sensor board answers <code>WHO</code> with <code>I am Dream</code>, so both projects find their own boards whatever COM numbers Windows hands out. Only one program can hold a serial port, so run one controller per arm.</p>
   </div>
 </section>
 

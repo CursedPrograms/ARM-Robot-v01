@@ -49,8 +49,9 @@
 
 **Keyboard on her web page:** the same keys as her Python controller: A D, W S, R F, T G and Q E move a joint 5 degrees (1 with Shift), Space holds the claw shut, Home is her rest pose.
 
-## Related Projects
+---
 
+## Related Projects
 
 <table>
   <tr>
@@ -71,6 +72,20 @@
     <td align="center"><a href="https://github.com/CursedPrograms/TINA"><img src="https://raw.githubusercontent.com/CursedPrograms/TINA/main/images/avatar_round.png" width="72" alt="TINA"><br>TINA</a></td>
   </tr>
 </table>
+
+---
+
+## Overview
+
+**Website: <https://cursedprograms.github.io/ARM-Robot-v01/>**
+
+ARM is a six-joint robotic arm: an Arduino UNO drives six 270° servos through a PCA9685, and a controller on the PC talks to it over USB.
+
+- **Controllers in many languages:** Python (the main one, with her arm panel, THEME and VOICE), C++, Julia, C#, Rust and Go, plus a USB joystick, the keyboard, and her web page on a phone.
+- **Web page:** her controller serves a slider per motor at `http://<PC>:5011/`; the Windows controller shows that same page in a window.
+- **Mind mode:** her LLM mind watches her through a webcam, thinks out loud, says what she's doing in her own voice, and picks things up by colour or by name.
+- **In the fleet:** she registers with RIFT as "ARM" on port `5011`, so the dashboard can drive her too.
+- **Safe limits:** channels, limits, rest angles and directions live in `config.json`; the claw stays between 40 and 145°.
 
 ---
 
@@ -426,14 +441,6 @@ Per-motor servo channel, angle range, resting angle, and invert flag all come fr
 
 ---
 
-<div align="center">&copy; Cursed Entertainment 2026</div>
-
-<div align="center">
-  <a href="https://cursed-entertainment.itch.io/">
-    <img src="https://github.com/CursedPrograms/cursedentertainment/raw/main/images/logos/logo-wide-grey.png" alt="Cursed Entertainment" width="250"/>
-  </a>
-</div>
-
 <div align="center">
   <a href="https://github.com/SynthWomb">
     <img src="https://github.com/SynthWomb/synth.womb/blob/main/logos/synthwomb07.png?raw=true" alt="SynthWomb" width="200"/>
@@ -443,6 +450,19 @@ Per-motor servo channel, angle range, resting angle, and invert flag all come fr
 ---
 
 <!-- DREAM-ECOSYSTEM:START -->
+
+---
+
+<div align="center">&copy; Cursed Entertainment 2026</div>
+
+<div align="center">
+  <a href="https://cursed-entertainment.itch.io/">
+    <img src="https://github.com/CursedPrograms/cursedentertainment/raw/main/images/logos/logo-wide-grey.png" alt="Cursed Entertainment" width="250"/>
+  </a>
+</div>
+
+---
+
 ## The DREAM Robotics ecosystem
 
 **Minds** — [DREAM](https://github.com/CursedPrograms/DREAM) companion · [TINA](https://github.com/CursedPrograms/TINA) engineer · [NINA](https://github.com/CursedPrograms/NINA) caretaker · [RIFT](https://github.com/CursedPrograms/RIFT) fleet hub · [LYCEA](https://github.com/CursedPrograms/LYCEA) training school  
