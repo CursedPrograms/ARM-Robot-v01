@@ -19,6 +19,8 @@ struct FleetState {
     std::mutex mutex;
     std::map<int, int> angles; // motor number -> current commanded angle
     std::vector<int> talk;     // utterances queued by /chirp, sent to arm.ino as TALK:<u>
+    bool talkMuted = false;    // her sound switch: she chats, the buzzer stays quiet (/talkmute, talk_mute.json)
+    bool chatOff = false;      // her chat switch: no Brainfuck with the fleet at all
 };
 
 class FleetServer {

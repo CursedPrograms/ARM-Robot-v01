@@ -205,6 +205,16 @@ std::string FleetServer::start(const MotorMap& motors, FleetState& state,
     motors_ = &motors;
     state_ = &state;
     port_ = port;
+    {   // her two talk switches, as controller.py keeps them: {"talk_muted": b, "chat_off": b} next to colour_scheme.xml
+        std::ifstream f(repoRoot() + "\talk_mute.json");
+        std::stringstream ss;
+        ss << f.rdbuf();
+        std::string s = ss.str();
+        s.erase(std::remove(s.begin(), s.end(), ' '), s.end());
+        std::lock_guard<std::mutex> lock(state.mutex);
+        state.talkMuted = s.find("\"talk_muted\":true") != std::string::npos;
+        state.chatOff = s.find("\"chat_off\":true") != std::string::npos;
+    }
     connected_ = std::move(connectedFn);
 
     SOCKET listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -313,7 +323,33 @@ void FleetServer::handleConnection(uintptr_t clientSocketRaw) {
         Json root = Json::makeObject();
         root.set("connected", Json::makeBool(connected_ ? connected_() : false));
         root.set("motors", std::move(motorsJson));
+        {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            root.set("talk_muted", Json::makeBool(state.talkMuted));
+            root.set("chat_off", Json::makeBool(state.chatOff));
+        }
         sendJson(client, 200, "OK", root);
+    } else if (req.path == "/talkmute") {
+        // Her two talk switches (RIFT's Fleet/talk_mute.py), saved like controller.py:
+        // ?on=0|1|toggle her buzzer when she chats, ?chat_off=0|1|toggle the chatting itself
+        auto flag = [](const std::string& v, bool now) { return v == "toggle" ? !now : (v == "1" || v == "true"); };
+        auto onIt = req.query.find("on");
+        auto chatIt = req.query.find("chat_off");
+        bool muted, chat;
+        {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            if (onIt != req.query.end()) state.talkMuted = flag(onIt->second, state.talkMuted);
+            if (chatIt != req.query.end()) state.chatOff = flag(chatIt->second, state.chatOff);
+            muted = state.talkMuted;
+            chat = state.chatOff;
+        }
+        const std::string json = std::string("{\"talk_muted\": ") + (muted ? "true" : "false") +
+                                 ", \"chat_off\": " + (chat ? "true" : "false") + "}";
+        if (onIt != req.query.end() || chatIt != req.query.end()) {
+            std::ofstream f(repoRoot() + "\talk_mute.json", std::ios::trunc);
+            f << json;
+        }
+        sendResponse(client, 200, "OK", "application/json", json);
     } else if (req.path == "/chirp") {
         // RIFT's fleet conversations: say utterance u (a Brainfuck phrase,
         // see arm/talk_bf.h) on the buzzer. Queued for the main loop.
@@ -322,7 +358,17 @@ void FleetServer::handleConnection(uintptr_t clientSocketRaw) {
         if (uIt != req.query.end()) {
             try { u = std::stoi(uIt->second); } catch (const std::exception&) { u = -1; }
         }
-        if (u < 0 || u > 13) {
+        bool muted, chat;
+        {
+            std::lock_guard<std::mutex> lock(state.mutex);
+            muted = state.talkMuted;
+            chat = state.chatOff;
+        }
+        if (chat) {
+            sendResponse(client, 409, "Conflict", "application/json", "{\"ok\":false,\"reason\":\"chat_off\"}");
+        } else if (muted && u >= 0 && u <= 13) {   // said, without the buzzer
+            sendResponse(client, 200, "OK", "application/json", "{\"ok\":true,\"silent\":true}");
+        } else if (u < 0 || u > 13) {
             sendResponse(client, 400, "Bad Request", "application/json", "{\"ok\":false,\"error\":\"use /chirp?u=0-13\"}");
         } else {
             {

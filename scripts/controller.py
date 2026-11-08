@@ -629,6 +629,9 @@ def create_fleet_app(motors, fleet_state, fleet_lock, connected):
     from flask import Flask, jsonify, request, send_from_directory
 
     app = Flask(__name__, static_folder=str(WEB_DIR), static_url_path="")
+    import talk_switch   # her Brainfuck talking muted or not: /talkmute (RIFT's Fleet/talk_mute.py)
+    talk = talk_switch.TalkSwitch(str(WEB_DIR.parent.parent / "talk_mute.json"))
+    talk.register(app)
 
     @app.route("/")
     def index():
@@ -654,6 +657,10 @@ def create_fleet_app(motors, fleet_state, fleet_lock, connected):
             u = -1
         if not 0 <= u <= 13:
             return jsonify({"ok": False, "error": "use /chirp?u=0-13"}), 400
+        if talk.chat_off:       # her chat switch is off: RIFT leaves her out
+            return talk.refuse()
+        if talk.muted:          # her sound switch is off: said, not beeped
+            return talk.silent()
         with fleet_lock:
             fleet_state.setdefault("talk", []).append(u)
         return jsonify({"ok": True})
@@ -664,6 +671,8 @@ def create_fleet_app(motors, fleet_state, fleet_lock, connected):
             angles = dict(fleet_state["angles"])
         return jsonify({
             "connected": connected(),
+            "talk_muted": talk.muted,
+            "chat_off": talk.chat_off,
             "motors": {
                 str(n): {"channel": m["channel"], "angle": angles[n], "min": m["min"], "max": m["max"]}
                 for n, m in motors.items()
